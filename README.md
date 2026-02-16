@@ -17,10 +17,13 @@ The setup is local, no cloud, no data collection. Just you and your language lea
 **To-Do:**
 
 - [x] Core clipboard-monitoring logic
+- [x] Learner's word database for SRS and future features
+- [ ] Factoring Learner Schema with AI connection, prompts, leaving core logic in main
+- [ ] Dashboard: Words learned and pending revision
+- [ ] Repeated scanned word: explain mindfully + update revision (3-4)
 - [ ] PaddleOCR integration
 - [ ] Personality-rich AI
 - [ ] Proper UI
-- [ ] Dashboard
 
 ## Tech stack
 
