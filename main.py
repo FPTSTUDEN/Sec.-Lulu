@@ -1,9 +1,11 @@
 # simple_clipboard_monitor.py
 import pyperclip
-from lib.windows import popup_message, popup_long_message
+from lib.windows import *
+from lib.profile_manager import *
 import requests
 import time
-from datetime import datetime
+# from datetime import datetime
+
 
 # popup_message("Clipboard Monitor", "This program will monitor your clipboard for Chinese text and provide explanations. Press Ctrl+C to stop.")
 class SimpleChineseLearner:
@@ -80,8 +82,12 @@ Use simple language and clear formatting.
                         
                         explanation = self.get_explanation(current)
                         print(f"\nExplanation:\n{explanation}\n")
-                        popup_long_message("Chinese Explanation", explanation)
                         
+                        Response_popup = Long_message_popup("Explanation", explanation)
+                        Response_popup.add_button("Save word", lambda: add_word(conn, cursor, current, explanation[:100], explanation[:100]))
+                        Response_popup.add_button("Close", None)
+                        
+                        Response_popup.show()
                         self.last_text = current
             except:
                 pass
@@ -89,6 +95,9 @@ Use simple language and clear formatting.
             time.sleep(1)
 
 if __name__ == "__main__":
+    conn = sqlite3.connect("vocab.db")
+    cursor = conn.cursor()
+    init_db(conn, cursor)
     learner = SimpleChineseLearner()
     learner.monitor()
     # learner.monitor_test()

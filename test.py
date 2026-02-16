@@ -1,19 +1,36 @@
-import tkinter as tk
-from tkinter import messagebox
+# import tkinter as tk
+# from tkinter import messagebox
 
-root = tk.Tk()
-root.withdraw() # Hides the main tiny window
-# messagebox.showinfo("Alert", "This is a standard popup!")
-# Long test popup
-def long_test_popup():
-    long_popup = tk.Toplevel()
-    long_popup.title("Long Test Popup")
-    text = "This is a long test popup. " * 20
-    label = tk.Label(long_popup, text=text, wraplength=400) # Wrap text
-    label.pack(pady=20) # Add some padding
-    long_popup.after(3000, long_popup.destroy)  # Auto close after 3 seconds
-    long_popup.mainloop()
-long_test_popup()
+# root = tk.Tk()
+# root.withdraw() # Hides the main tiny window
+# # messagebox.showinfo("Alert", "This is a standard popup!")
+# # Long test popup
+# def long_test_popup():
+#     long_popup = tk.Toplevel()
+#     long_popup.title("Long Test Popup")
+#     text = "This is a long test popup. " * 20
+#     label = tk.Label(long_popup, text=text, wraplength=400) # Wrap text
+#     label.pack(pady=20) # Add some padding
+#     long_popup.after(3000, long_popup.destroy)  # Auto close after 3 seconds
+#     long_popup.mainloop()
+# long_test_popup()
+
+from lib.profile_manager import *
+conn = sqlite3.connect("vocab.db")
+cursor = conn.cursor()
+reset(conn, cursor)
+init_db(conn, cursor)
+word_id = add_word(conn, cursor, "manger", "to eat", "Je veux manger une pomme.")
+print(get_word_stats(conn, cursor, word_id))
+for i in range(3): update_review(conn, cursor, word_id, 4)
+print(get_word_stats(conn, cursor, word_id))
+# due_words = get_due_words(conn, cursor)
+# print(due_words)
+
+
+
+
+
 # === Minimal PySide6 App with Threading and Popup ===
 # from PySide6.QtWidgets import *
 # from PySide6.QtCore import *
