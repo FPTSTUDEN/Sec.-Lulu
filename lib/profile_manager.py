@@ -37,6 +37,12 @@ def add_word(conn, cursor, word, translation, example):
     ))
     conn.commit()
     return wordid
+def get_word_id(conn, cursor, word):
+    cursor.execute("""
+        SELECT id FROM words WHERE word = ?
+    """, (word,))
+    result = cursor.fetchone()
+    return result[0] if result else None
 def get_word_stats(conn, cursor, word_id):
     cursor.execute("""
         SELECT review_count, ease_factor, interval, next_review FROM words WHERE id = ?

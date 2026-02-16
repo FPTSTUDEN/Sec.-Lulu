@@ -2,6 +2,7 @@
 import pyperclip
 from lib.windows import *
 from lib.profile_manager import *
+from lib.learner_prompts import *
 import requests
 import time
 # from datetime import datetime
@@ -15,17 +16,14 @@ class SimpleChineseLearner:
         self.model = "qwen2.5:7b"
     
     def get_explanation(self, text):
-        prompt = f"""Please explain this Chinese text in English with detailed breakdown:
-
-Text: "{text}"
-
-Provide:
-1. English and Chinese explanation
-2. Word-by-word meaning
-3. Example sentences
-Use simple language and clear formatting.
-"""
-        
+        wordid=get_word_id(conn, cursor, text)
+        if wordid:
+            update_review(conn, cursor, wordid, 3) # Assume user is having trouble remembering the word
+            word_stats = get_word_stats(conn, cursor, wordid)
+            frequency = word_stats["review_count"] if word_stats else 1
+        else:
+            frequency = 1
+        prompt = get_prompt(text, frequency)
         try:
             response = requests.post(self.ollama_url, json={
                 "model": self.model,

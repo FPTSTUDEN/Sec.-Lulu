@@ -18,11 +18,11 @@ The setup is local, no cloud, no data collection. Just you and your language lea
 
 - [x] Core clipboard-monitoring logic
 - [x] Learner's word database for SRS and future features
-- [ ] Factoring Learner Schema with AI connection, prompts, leaving core logic in main
+- [x] Repeated scanned word: explain mindfully + update revision (3-4)
+- [ ] ~~Factoring Learner Schema with AI connection, prompts generator (another file), leaving core logic in main~~
 - [ ] Dashboard: Words learned and pending revision
-- [ ] Repeated scanned word: explain mindfully + update revision (3-4)
+- [ ] Personality-rich **AI profile**, flexibly blending both languages
 - [ ] PaddleOCR integration
-- [ ] Personality-rich AI
 - [ ] Proper UI
 
 ## Tech stack
