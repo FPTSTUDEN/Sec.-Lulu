@@ -101,4 +101,6 @@ if __name__ == "__main__":
     conn = sqlite3.connect("vocab.db")
     cursor = conn.cursor()
     init_db(conn, cursor)
+    noword=get_word_id(conn,cursor,"blablah")
+    if noword: print("ok")
     add_word(conn, cursor, "manger", "to eat", "Je veux manger une pomme.")

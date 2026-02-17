@@ -17,6 +17,7 @@ class SimpleChineseLearner:
     
     def get_explanation(self, text):
         wordid=get_word_id(conn, cursor, text)
+        print(wordid)
         if wordid:
             update_review(conn, cursor, wordid, 3) # Assume user is having trouble remembering the word
             word_stats = get_word_stats(conn, cursor, wordid)
@@ -82,7 +83,7 @@ class SimpleChineseLearner:
                         print(f"\nExplanation:\n{explanation}\n")
                         
                         Response_popup = Long_message_popup("Explanation", explanation)
-                        Response_popup.add_button("Save word", lambda: add_word(conn, cursor, current, explanation[:100], explanation[:100]))
+                        Response_popup.add_button("Save word", lambda: add_word(conn, cursor, current, explanation[:100], explanation[:100])) #TODO
                         Response_popup.add_button("Close", None)
                         
                         Response_popup.show()
@@ -91,6 +92,7 @@ class SimpleChineseLearner:
                 pass
             
             time.sleep(1)
+            print(current,self.last_text)
 
 if __name__ == "__main__":
     conn = sqlite3.connect("vocab.db")

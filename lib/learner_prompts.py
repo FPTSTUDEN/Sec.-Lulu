@@ -24,3 +24,4 @@ def get_prompt(word,frequency):
         3. Example sentences in Chinese
         Use simple language and clear formatting.
         """
+    return prompt

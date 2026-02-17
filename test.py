@@ -18,7 +18,7 @@
 from lib.profile_manager import *
 conn = sqlite3.connect("vocab.db")
 cursor = conn.cursor()
-reset(conn, cursor)
+# reset(conn, cursor)
 init_db(conn, cursor)
 word_id = add_word(conn, cursor, "manger", "to eat", "Je veux manger une pomme.")
 print(get_word_stats(conn, cursor, word_id))

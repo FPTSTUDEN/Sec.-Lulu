@@ -8,6 +8,7 @@
 <!-- > **[InLava]** Well, that was hot. Not literally, I hope? -->
 > <img align="right" alt="cover" src="./.misc/cover.png" width=25% height=25%>
 Sec. Lulu is an AI language learning assistant that records new words as you go (clipboard or OCR), tailoring them into a structured learning program just for you.
+
 The setup is local, no cloud, no data collection. Just you and your language learning journey.
 
 **Currently supporting:**
@@ -35,6 +36,14 @@ The setup is local, no cloud, no data collection. Just you and your language lea
 - Monitors clipboard for new words
 - Organises word learning data into a personal profile
 - Daily "What you learned" summaries with tips, reviews and exercises
+
+## Bugs
+
+- Sometimes new clipboard words are not registered
+- invalid command name "1804464740544\< lambda \>"
+- bgerror failed to handle background error.
+    Original error: invalid command name "1804464659968check_dpi_scaling"
+    Error in bgerror: can't invoke "tk" command: application has been destroyed
 
 ## Credits
 
