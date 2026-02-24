@@ -1,0 +1,9 @@
+Instead of manually typing IDs, your UI should:
+
+Store word_id internally
+
+Display word text
+
+Pass ID automatically when button clicked
+
+So the user never sees IDs.

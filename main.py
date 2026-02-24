@@ -4,7 +4,9 @@ from lib.windows import *
 from lib.profile_manager import *
 from lib.learner_prompts import *
 import requests
+import threading
 import time
+import os
 # from datetime import datetime
 
 
@@ -63,38 +65,64 @@ class SimpleChineseLearner:
     def monitor(self):
         print("Monitoring clipboard for Chinese text...")
         print("Press Ctrl+C to stop\n")
-        
-        while True:
+        panel=ControlPanel()
+        # Start polling driven by the GUI event loop (no blocking sleeps)
+        def poll():
             try:
                 current = pyperclip.paste()
-                #skip first run
-                if not self.last_text:
-                    self.last_text = current
-                    continue
-                if current and current != self.last_text:
-                    self.last_text = current
-                    # Check if contains Chinese characters
-                    if any('\u4e00' <= char <= '\u9fff' for char in current):
-                        print(f"\n{'='*50}")
-                        print(f"Detected: {current}")
-                        print(f"{'='*50}")
-                        
-                        explanation = self.get_explanation(current)
-                        print(f"\nExplanation:\n{explanation}\n")
-                        
-                        Response_popup = Long_message_popup("Explanation", explanation)
-                        Response_popup.add_button("Save word", lambda: add_word(conn, cursor, current, explanation[:100], explanation[:100])) #TODO
-                        Response_popup.add_button("Close", None)
-                        
-                        Response_popup.show()
-                        self.last_text = current
-            except:
-                pass
-            
-            time.sleep(1)
-            print(current,self.last_text)
+            except Exception:
+                current = None
+
+            # If Exit was pressed, destroy the panel and stop polling
+            if getattr(panel, "done", False):
+                print("Exiting...")
+                try:
+                    panel.root.destroy()
+                except Exception:
+                    pass
+                return
+
+            # If paused, update last_text to avoid catching up old contents
+            if not getattr(panel, "opened", True):
+                self.last_text = current
+                panel.root.after(1000, poll)
+                return
+
+            # Skip the very first observed value: initialize last_text on first run
+            if self.last_text == "":
+                self.last_text = current
+                panel.root.after(1000, poll)
+                return
+
+            # Only handle new clipboard contents
+            if current and current != self.last_text:
+                # update last_text early to avoid duplicate processing while popups run
+                self.last_text = current
+                if any('\u4e00' <= ch <= '\u9fff' for ch in (current or "")):
+                    print(f"\n{'='*50}")
+                    print(f"Detected: {current}")
+                    print(f"{'='*50}")
+
+                    explanation = self.get_explanation(current)
+                    print(f"\nExplanation:\n{explanation}\n")
+
+                    Response_popup = Long_message_popup("Explanation", explanation)
+                    Response_popup.add_button("Save word", lambda: add_word(conn, cursor, current, explanation[:100], explanation[:100]))
+                    Response_popup.add_button("Close", None)
+
+                    Response_popup.show()
+
+            # schedule next poll
+            panel.root.after(1000, poll)
+
+        panel.root.after(0, poll)
+        panel.show()
 
 if __name__ == "__main__":
+    # Changes execution path 
+    os.chdir(os.path.dirname(os.path.abspath(__file__)))
+    
+    # Connect to database
     conn = sqlite3.connect("vocab.db")
     cursor = conn.cursor()
     init_db(conn, cursor)

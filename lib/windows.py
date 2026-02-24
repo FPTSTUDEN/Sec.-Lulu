@@ -31,7 +31,36 @@ class Long_message_popup:
             command = self.long_popup.destroy
         btn = customtkinter.CTkButton(self.long_popup, text=text, command=command)
         btn.pack(pady=10)
+class ControlPanel:
+    def __init__(self): # always-on-top popup, with start,pause,exit buttons
+        self.opened=True
+        self.done=False
+        self.root = customtkinter.CTk()
+        self.root.title("Monitor")
+        self.root.resizable(width=False, height=False)
+        self.root.wm_attributes("-topmost", True)
+        btn = customtkinter.CTkButton(self.root, text="Start", command=lambda: self.start())
+        btn.pack(side="top", fill="x")
+        btn = customtkinter.CTkButton(self.root, text="Pause", command=lambda: self.pause())
+        btn.pack(side="top", fill="x")
+        btn = customtkinter.CTkButton(self.root, text="Exit", command=lambda: self.cancel())
+        btn.pack(side="top", fill="x")
+    def show(self):
+        self.root.mainloop()
+    def hide(self):
+        self.root.destroy()
+    def start(self):
+        self.opened=True
+    def pause(self):
+        self.opened=False
+    def cancel(self):
+        # print("Cancelled")
+        self.done=True
+        # print(self.done)
+        self.root.destroy()
 if __name__ == "__main__":
     popup_message("Test Message", "This is a test message to verify the popup_message function is working correctly.")
+    panel=ControlPanel()
+    panel.show()
     longpop=Long_message_popup("Test Long Message", "This is a long message to test the Long_message_popup class. It should wrap properly and use the custom font loaded from the Mengshen-Handwritten.ttf file. If you see this message clearly, it means the function is working correctly!"*5)
     longpop.show()
