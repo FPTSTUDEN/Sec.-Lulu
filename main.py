@@ -4,7 +4,6 @@ from lib.windows import *
 from lib.profile_manager import *
 from lib.learner_prompts import *
 import requests
-import threading
 import time
 import os
 # from datetime import datetime

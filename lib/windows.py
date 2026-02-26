@@ -31,33 +31,199 @@ class Long_message_popup:
             command = self.long_popup.destroy
         btn = customtkinter.CTkButton(self.long_popup, text=text, command=command)
         btn.pack(pady=10)
+import customtkinter as ctk
+
 class ControlPanel:
-    def __init__(self): # always-on-top popup, with start,pause,exit buttons
-        self.opened=True
-        self.done=False
-        self.root = customtkinter.CTk()
+    def __init__(self, app_callback=None): 
+        # app_callback is a function passed from your main script to launch App()
+        self.opened = False
+        self.done = False
+        self.app_callback = app_callback
+        
+        self.root = ctk.CTk()
         self.root.title("Monitor")
         self.root.resizable(width=False, height=False)
         self.root.wm_attributes("-topmost", True)
-        btn = customtkinter.CTkButton(self.root, text="Start", command=lambda: self.start())
-        btn.pack(side="top", fill="x")
-        btn = customtkinter.CTkButton(self.root, text="Pause", command=lambda: self.pause())
-        btn.pack(side="top", fill="x")
-        btn = customtkinter.CTkButton(self.root, text="Exit", command=lambda: self.cancel())
-        btn.pack(side="top", fill="x")
+        
+        # --- Responsive Start/Pause Button ---
+        self.state_btn = ctk.CTkButton(
+            self.root, 
+            text="Start", 
+            fg_color="green", 
+            command=self.toggle_state
+        )
+        self.state_btn.pack(side="top", fill="x", padx=10, pady=5)
+        
+        # --- Open Main App Button ---
+        self.app_btn = ctk.CTkButton(
+            self.root, 
+            text="Open Main App", 
+            command=self.open_app
+        )
+        self.app_btn.pack(side="top", fill="x", padx=10, pady=5)
+
+        # --- Exit Button ---
+        self.exit_btn = ctk.CTkButton(
+            self.root, 
+            text="Exit", 
+            fg_color="#942626", # Dark Red
+            hover_color="#731d1d",
+            command=self.cancel
+        )
+        self.exit_btn.pack(side="top", fill="x", padx=10, pady=5)
+
+    def toggle_state(self):
+        """Switches between Start and Pause states"""
+        self.opened = not self.opened
+        if self.opened:
+            self.state_btn.configure(text="Pause", fg_color="orange")
+            print("Status: Running")
+        else:
+            self.state_btn.configure(text="Start", fg_color="green")
+            print("Status: Paused")
+
+    def open_app(self):
+        """Triggers the main App launch"""
+        if self.app_callback:
+            # We use after(0, ...) to ensure the callback runs 
+            # within the mainloop's safe execution window
+            self.root.after(0, self.app_callback)
+
     def show(self):
         self.root.mainloop()
-    def hide(self):
-        self.root.destroy()
-    def start(self):
-        self.opened=True
-    def pause(self):
-        self.opened=False
+
     def cancel(self):
-        # print("Cancelled")
-        self.done=True
-        # print(self.done)
+        self.done = True
         self.root.destroy()
+class ReviewFrame(ctk.CTkFrame):
+    """Refactored from your original ReviewUI class"""
+    def __init__(self, master, reviewer, **kwargs):
+        super().__init__(master, **kwargs)
+        self.reviewer = reviewer
+        self._setup_ui()
+        self._load_words()
+
+    def _setup_ui(self):
+        # Title
+        self.title = ctk.CTkLabel(
+            self, text="📚 Word Review", 
+            font=ctk.CTkFont(size=24, weight="bold")
+        )
+        self.title.pack(pady=10)
+        
+        self.progress_label = ctk.CTkLabel(self, text="")
+        self.progress_label.pack()
+        
+        # Word card frame
+        card = ctk.CTkFrame(self)
+        card.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        self.word_label = ctk.CTkLabel(card, text="", font=ctk.CTkFont(size=36, weight="bold"), wraplength=400)
+        self.word_label.pack(pady=(30, 10))
+        
+        self.trans_label = ctk.CTkLabel(card, text="", font=ctk.CTkFont(size=24), text_color="green")
+        self.trans_label.pack(pady=10)
+        
+        self.example_label = ctk.CTkLabel(card, text="", font=ctk.CTkFont(size=14, slant="italic"), text_color="gray", wraplength=400)
+        self.example_label.pack(pady=10)
+        
+        # Review buttons
+        btn_frame = ctk.CTkFrame(self)
+        btn_frame.pack(fill="x", padx=20, pady=10)
+        
+        self.hard_btn = ctk.CTkButton(btn_frame, text="Hard", fg_color="orange", command=lambda: self._review("hard"))
+        self.hard_btn.pack(side="left", padx=5, expand=True)
+        
+        self.good_btn = ctk.CTkButton(btn_frame, text="Good", fg_color="green", command=lambda: self._review("good"))
+        self.good_btn.pack(side="left", padx=5, expand=True)
+
+        # Navigation
+        nav_frame = ctk.CTkFrame(self, fg_color="transparent")
+        nav_frame.pack(fill="x", padx=20, pady=10)
+        
+        self.prev_btn = ctk.CTkButton(nav_frame, text="← Previous", command=self._prev_word)
+        self.prev_btn.pack(side="left", padx=5)
+        
+        self.next_btn = ctk.CTkButton(nav_frame, text="Next →", command=self._next_word)
+        self.next_btn.pack(side="right", padx=5)
+
+    def _load_words(self):
+        self.reviewer.load_review_words()
+        self._update_display()
+
+    def _update_display(self):
+        word = self.reviewer.get_current_word()
+        if word:
+            self.word_label.configure(text=word[1])
+            self.trans_label.configure(text=word[2])
+            self.example_label.configure(text=f'"{word[3]}"' if word[3] else "")
+            self.progress_label.configure(text=self.reviewer.get_progress())
+            self.prev_btn.configure(state="normal" if self.reviewer.current_index > 0 else "disabled")
+            self.next_btn.configure(state="normal" if self.reviewer.current_index < len(self.reviewer.words) - 1 else "disabled")
+        else:
+            self.word_label.configure(text="✨ All caught up!")
+
+    def _review(self, quality):
+        if self.reviewer.has_words():
+            next_date = self.reviewer.review_current(quality)
+            tkmb.showinfo("Review Complete", f"Next review: {next_date}")
+            self._update_display()
+
+    def _prev_word(self):
+        if self.reviewer.current_index > 0:
+            self.reviewer.current_index -= 1
+            self._update_display()
+
+    def _next_word(self):
+        if self.reviewer.next_word():
+            self._update_display()
+
+class HomeFrame(ctk.CTkFrame):
+    def __init__(self, master, **kwargs):
+        super().__init__(master, **kwargs)
+        label = ctk.CTkLabel(self, text="Welcome to Vocabulary Reviewer", font=ctk.CTkFont(size=20, weight="bold"))
+        label.pack(pady=40)
+        desc = ctk.CTkLabel(self, text="Select 'Review' from the sidebar to start studying.")
+        desc.pack(pady=10)
+
+class App(ctk.CTk):
+    def __init__(self, reviewer):
+        super().__init__()
+        self.reviewer = reviewer
+        self.title("Vocabulary App")
+        self.geometry("800x550")
+
+        # Layout configuration
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_rowconfigure(0, weight=1)
+
+        # Sidebar
+        self.sidebar = ctk.CTkFrame(self, width=140, corner_radius=0)
+        self.sidebar.grid(row=0, column=0, sticky="nsew")
+        
+        self.logo = ctk.CTkLabel(self.sidebar, text="VocabMaster", font=ctk.CTkFont(size=20, weight="bold"))
+        self.logo.grid(row=0, column=0, padx=20, pady=20)
+
+        self.btn_home = ctk.CTkButton(self.sidebar, text="Home", command=lambda: self.show_frame("home"))
+        self.btn_home.grid(row=1, column=0, padx=20, pady=10)
+
+        self.btn_review = ctk.CTkButton(self.sidebar, text="Review", command=lambda: self.show_frame("review"))
+        self.btn_review.grid(row=2, column=0, padx=20, pady=10)
+
+        # Initialize Frames
+        self.frames = {}
+        self.frames["home"] = HomeFrame(self, fg_color="transparent")
+        self.frames["review"] = ReviewFrame(self, self.reviewer, fg_color="transparent")
+
+        self.show_frame("home")
+
+    def show_frame(self, page_name):
+        # Hide all
+        for frame in self.frames.values():
+            frame.grid_forget()
+        # Show selected
+        self.frames[page_name].grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
+
 if __name__ == "__main__":
     popup_message("Test Message", "This is a test message to verify the popup_message function is working correctly.")
     panel=ControlPanel()
