@@ -84,7 +84,19 @@ class VocabDatabase:
         """, (now,))
         return self.cursor.fetchall()
     
-    def get_word_stats(self, word_id: str) -> Dict[str, any]:
+    def get_recent_words(self, limit: int = 5) -> List[Tuple]:
+        """
+        Get most recently added words.
+        Returns list of tuples with full word data.
+        """
+        self.cursor.execute("""
+            SELECT * FROM words 
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (limit,))
+        return self.cursor.fetchall()
+    
+    def get_word_stats(self, word_id: str) -> Dict[str, Optional[str]]:
         """Get review statistics for a word."""
         self.cursor.execute("""
             SELECT review_count, ease_factor, interval, next_review 

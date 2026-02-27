@@ -5,7 +5,6 @@
     <!-- <br> -->
 </h1>
 
-<!-- > **[InLava]** Well, that was hot. Not literally, I hope? -->
 > <img align="right" alt="cover" src="./.misc/cover.png" width=25% height=25%>
 Sec. Lulu is an AI language learning assistant that records new words as you go (clipboard or OCR), tailoring them into a structured learning program just for you.
 
@@ -20,9 +19,11 @@ The setup is local, no cloud, no data collection. Just you and your language lea
 - [x] Learner's word database for SRS and future features
 - [x] Repeated scanned word: explain mindfully + update revision (3-4)
 - [x] Side panel (always-on-top) for start/pausing operations
-- [x] Dashboard: Words learned and pending revision
+- [x] Review section for word revision
+- [x] Home: Challenge generator
+- [x] Mock database for test runs: ```python app_integrated.py --use-mock```
 - [ ] EasyOCR integration because Powertoys OCR messed it up sometimes
-- [ ] "What you learned" summaries
+- [ ] Home: "What you learned" summaries
 - [ ] Personality-rich **AI profile**, flexibly blending both languages
 - [ ] PaddleOCR integration
 - [ ] Proper UI

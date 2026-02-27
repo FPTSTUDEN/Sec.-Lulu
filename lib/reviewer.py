@@ -6,10 +6,16 @@ from lib.db import VocabDatabase
 
 
 class WordReviewer:
-    """Manages vocabulary review sessions using VocabDatabase."""
+    """Manages vocabulary review sessions using a database class.
+
+    The reviewer is designed for dependency injection so that tests or the
+    integrated application can supply either the real `VocabDatabase` or a
+    mock/subclass.  Only the interface defined in `VocabDatabase` is required.
+    """
     
-    def __init__(self, db_path: str = "vocab.db"):
-        self.db = VocabDatabase(db_path)
+    def __init__(self, db_path: str = "vocab.db", db_cls=VocabDatabase):
+        # db_cls must provide the same API as VocabDatabase
+        self.db = db_cls(db_path)
         self.words = []
         self.current_index = -1
         self.quality_map = {"hard": 2, "good": 3, "easy": 4}

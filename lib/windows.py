@@ -2,6 +2,8 @@ import tkinter as tk
 import tkinter.messagebox as tkmb
 import customtkinter
 import os
+import threading
+from lib.localai import OllamaClient
 current_folder = os.path.dirname(os.path.abspath(__file__))
 # customtkinter.FontManager.load_font(os.path.join(current_folder, "Mengshen-HanSerif.ttf"))
 customtkinter.FontManager.load_font(os.path.join(current_folder, "Mengshen-Handwritten.ttf"))
@@ -183,17 +185,78 @@ class ReviewFrame(ctk.CTkFrame):
             self._update_display()
 
 class HomeFrame(ctk.CTkFrame):
-    def __init__(self, master, **kwargs):
+    def __init__(self, master, ai_client, db, **kwargs):
         super().__init__(master, **kwargs)
-        label = ctk.CTkLabel(self, text="Welcome to Vocabulary Reviewer", font=ctk.CTkFont(size=20, weight="bold"))
-        label.pack(pady=40)
-        desc = ctk.CTkLabel(self, text="Select 'Review' from the sidebar to start studying.")
-        desc.pack(pady=10)
+        self.ai = ai_client
+        self.db = db
+        self.insight_text.configure(font=("Mengshen-Handwritten", 14))
+        self.is_generating = False
+        
+        # Title
+        self.label = ctk.CTkLabel(self, text="Welcome Back", font=ctk.CTkFont(size=24, weight="bold"))
+        self.label.pack(pady=(20, 0))
+
+        # AI Generated Insight Box
+        self.insight_card = ctk.CTkFrame(self, fg_color=("gray90", "gray15"))
+        self.insight_card.pack(fill="x", padx=40, pady=20)
+        
+        self.insight_title = ctk.CTkLabel(self.insight_card, text="✨ Daily AI Challenge", font=ctk.CTkFont(weight="bold"))
+        self.insight_title.pack(pady=5)
+        
+        self.insight_text = ctk.CTkLabel(self.insight_card, text="Click 'New Challenge' to generate a challenge", wraplength=400)
+        self.insight_text.pack(pady=10, padx=10)
+
+        # Refresh Button for AI
+        self.refresh_btn = ctk.CTkButton(self, text="New Challenge", command=self.generate_challenge)
+        self.refresh_btn.pack(pady=10)
+
+    def generate_challenge(self):
+        """Generate a vocabulary challenge using AI"""
+        if self.is_generating:
+            tkmb.showwarning("In Progress", "Already generating a challenge. Please wait.")
+            return
+
+        if not self.ai or not self.db:
+            self.insight_text.configure(text="❌ AI Client or Database not available")
+            return
+
+        # fetch words on main thread to avoid cross-thread DB usage
+        try:
+            words = self.db.get_recent_words(limit=3)
+        except Exception as e:
+            words = []
+            print(f"Error reading recent words: {e}")
+
+        self.is_generating = True
+        self.refresh_btn.configure(state="disabled")
+        self.insight_text.configure(text="Generating challenge...")
+
+        def generate():
+            try:
+                if not words:
+                    response = "No words in database yet. Add some words first!"
+                else:
+                    word_list = ", ".join([w[1] for w in words])
+                    prompt = f"Write a very short, funny 2-sentence story using these words: {word_list}"
+                    response = self.ai.generate_response(prompt)
+
+                # Update UI in main thread
+                self.after(0, lambda: self.insight_text.configure(text=response))
+            except Exception as e:
+                error_msg = f"Error generating challenge: {str(e)}"
+                self.after(0, lambda: self.insight_text.configure(text=error_msg))
+            finally:
+                self.is_generating = False
+                self.after(0, lambda: self.refresh_btn.configure(state="normal"))
+
+        threading.Thread(target=generate, daemon=True).start()
 
 class App(ctk.CTk):
-    def __init__(self, reviewer):
+    def __init__(self, reviewer, ai_client=None, db=None):
         super().__init__()
         self.reviewer = reviewer
+        self.ai_client = ai_client
+        self.db = db
         self.title("Vocabulary App")
         self.geometry("800x550")
 
@@ -216,7 +279,7 @@ class App(ctk.CTk):
 
         # Initialize Frames
         self.frames = {}
-        self.frames["home"] = HomeFrame(self, fg_color="transparent")
+        self.frames["home"] = HomeFrame(self, self.ai_client, self.db, fg_color="transparent")
         self.frames["review"] = ReviewFrame(self, self.reviewer, fg_color="transparent")
 
         self.show_frame("home")

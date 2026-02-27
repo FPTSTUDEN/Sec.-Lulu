@@ -12,21 +12,29 @@ from lib.windows import ControlPanel, App, Long_message_popup
 from lib.reviewer import WordReviewer
 from lib.db import VocabDatabase
 from lib.learner_prompts import get_prompt
+from lib.localai import OllamaClient
+from mock_database_generator import MockDatabaseGenerator
 
 
 class IntegratedApp:
     """Main application that coordinates ControlPanel and VocabApp"""
     
-    def __init__(self, db_path="vocab.db"):
+    def __init__(self, db_path="vocab.db", use_mock=False):
+        # allow a special default when using mock
+        if use_mock and db_path == "vocab.db":
+            db_path = "mock_vocab.db"
+
         self.db_path = db_path
+        self.use_mock = use_mock
         self.database = None  # Will be created in the polling thread
-        self.reviewer = WordReviewer(db_path)
+        # pass the db class through to the reviewer so it uses the same type
+        self.db_cls = MockDatabaseGenerator if use_mock else VocabDatabase
+        self.reviewer = WordReviewer(db_path, db_cls=self.db_cls)
         self.app_window = None
         self.app_thread = None
         self.last_clipboard_text = ""
         self.control_panel = None
-        self.ollama_url = "http://localhost:11434/api/generate"
-        self.model = "qwen2.5:7b"
+        self.ai = OllamaClient()
     
     def launch_vocab_app(self):
         """Launch the vocabulary learning app in a separate thread"""
@@ -43,10 +51,11 @@ class IntegratedApp:
     def _run_vocab_app(self):
         """Run the vocabulary app in a separate thread"""
         try:
-            # Create a fresh WordReviewer in this thread to avoid SQLite thread-safety issues
+            # Create a fresh WordReviewer and Database connection in this thread to avoid SQLite thread-safety issues
             # SQLite connections cannot be shared across threads
-            reviewer = WordReviewer(self.db_path)
-            self.app_window = App(reviewer)
+            reviewer = WordReviewer(self.db_path, db_cls=self.db_cls)
+            db = self.db_cls(self.db_path)
+            self.app_window = App(reviewer, ai_client=self.ai, db=db)
             self.app_window.mainloop()
         except Exception as e:
             print(f"Error launching app: {e}")
@@ -58,7 +67,7 @@ class IntegratedApp:
     def get_explanation(self, text):
         """Get explanation from Ollama for detected Chinese text"""
         # Create a fresh database connection for this thread
-        db = VocabDatabase(self.db_path)
+        db = self.db_cls(self.db_path)
         
         try:
             wordid = db.get_word_id(text)
@@ -69,20 +78,8 @@ class IntegratedApp:
             else:
                 frequency = 1
             
-            prompt = get_prompt(text, frequency)
-            try:
-                response = requests.post(self.ollama_url, json={
-                    "model": self.model,
-                    "prompt": prompt,
-                    "stream": False
-                })
-                
-                if response.status_code == 200:
-                    return response.json().get('response', '')
-                else:
-                    return f"Error: {response.status_code} - {response.text}"
-            except:
-                return "Could not connect to Ollama"
+            # prompt = get_prompt(text, frequency)
+            return self.ai.get_word_explanation(text, frequency, get_prompt)
         finally:
             db.close()
     
@@ -93,7 +90,7 @@ class IntegratedApp:
             
             def save_word():
                 # Create a fresh database connection for this thread
-                db = VocabDatabase(self.db_path)
+                db = self.db_cls(self.db_path)
                 try:
                     db.add_word(text, explanation[:100], explanation[:100])
                     print(f"Saved: {text}")
@@ -188,8 +185,18 @@ class IntegratedApp:
 
 
 def main():
-    """Entry point"""
-    app = IntegratedApp()
+    """Entry point with simple CLI options."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Integrated vocab app")
+    parser.add_argument("--use-mock", action="store_true",
+                        help="Use the mock database implementation")
+    parser.add_argument("--db-path", default="vocab.db",
+                        help="Path to database file (overrides default)")
+    args = parser.parse_args()
+
+    app = IntegratedApp(db_path=args.db_path, use_mock=args.use_mock)
+    print(f"Using {'mock' if args.use_mock else 'real'} database at {app.db_path}")
     app.run()
 
 
