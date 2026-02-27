@@ -17,11 +17,12 @@ The setup is local, no cloud, no data collection. Just you and your language lea
 
 **To-Do:**
 
-- [x] Core clipboard-monitoring logic
 - [x] Learner's word database for SRS and future features
 - [x] Repeated scanned word: explain mindfully + update revision (3-4)
-- [ ] ~~Factoring Learner Schema with AI connection, prompts generator (another file), leaving core logic in main~~
-- [ ] Dashboard: Words learned and pending revision
+- [x] Side panel (always-on-top) for start/pausing operations
+- [x] Dashboard: Words learned and pending revision
+- [ ] EasyOCR integration because Powertoys OCR messed it up sometimes
+- [ ] "What you learned" summaries
 - [ ] Personality-rich **AI profile**, flexibly blending both languages
 - [ ] PaddleOCR integration
 - [ ] Proper UI
