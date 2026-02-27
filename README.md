@@ -6,7 +6,9 @@
 </h1>
 
 > <img align="right" alt="cover" src="./.misc/cover.png" width=25% height=25%>
-Sec. Lulu is an AI language learning assistant that records new words as you go (clipboard or OCR), tailoring them into a structured learning program just for you.
+> Stop looking up words. Start living them.
+In the flow of reading or browsing, every unfamiliar word is an opportunity lost to the friction of switching tabs.
+Sec. Lulu - an AI language learning assistant - hopes to bridge that gap by **recording new words as you go** (clipboard or OCR), tailoring them into a **structured learning program** just for you. Instead of static dictionary entries, you receive AI-driven insights, usage examples, and creative stories that turn abstract characters into memorable concepts.
 
 The setup is local, no cloud, no data collection. Just you and your language learning journey.
 
@@ -16,14 +18,15 @@ The setup is local, no cloud, no data collection. Just you and your language lea
 
 **To-Do:**
 
-- [x] Learner's word database for SRS and future features
+- [x] Learner's word database
 - [x] Repeated scanned word: explain mindfully + update revision (3-4)
 - [x] Side panel (always-on-top) for start/pausing operations
-- [x] Review section for word revision
+- [x] **Anki-based** word review session
 - [x] Home: Challenge generator
 - [x] Mock database for test runs: ```python app_integrated.py --use-mock```
-- [ ] EasyOCR integration because Powertoys OCR messed it up sometimes
 - [ ] Home: "What you learned" summaries
+- [ ] Lite/Detailed mode: AI gives brief definition (faster) or explains word in detail
+- [ ] EasyOCR integration because Powertoys OCR messed it up sometimes
 - [ ] Personality-rich **AI profile**, flexibly blending both languages
 - [ ] PaddleOCR integration
 - [ ] Proper UI
