@@ -1,4 +1,5 @@
 import tkinter as tk
+import tkinter.messagebox as tkmb
 import customtkinter
 import os
 current_folder = os.path.dirname(os.path.abspath(__file__))
@@ -7,7 +8,7 @@ customtkinter.FontManager.load_font(os.path.join(current_folder, "Mengshen-Handw
 def popup_message(title, message):
     root = tk.Tk()
     root.withdraw()  # Hide the main window
-    tk.messagebox.showinfo(title, message)
+    tkmb.showinfo(title, message)
     root.destroy()
 class Long_message_popup:
     def __init__(self, title, message):
@@ -83,11 +84,14 @@ class ControlPanel:
             print("Status: Paused")
 
     def open_app(self):
-        """Triggers the main App launch"""
+        """Triggers the main App launch without blocking the control panel"""
         if self.app_callback:
-            # We use after(0, ...) to ensure the callback runs 
-            # within the mainloop's safe execution window
-            self.root.after(0, self.app_callback)
+            # Execute callback directly - should be thread-safe if properly designed
+            # (e.g., launching in a separate thread internally)
+            try:
+                self.app_callback()
+            except Exception as e:
+                tkmb.showerror("Error", f"Failed to open app: {e}")
 
     def show(self):
         self.root.mainloop()
@@ -218,8 +222,8 @@ class App(ctk.CTk):
         self.show_frame("home")
 
     def show_frame(self, page_name):
-        # Hide all
-        for frame in self.frames.values():
+        # Hide all - use list() to avoid "dictionary changed size during iteration"
+        for frame in list(self.frames.values()):
             frame.grid_forget()
         # Show selected
         self.frames[page_name].grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
