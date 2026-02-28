@@ -23,7 +23,7 @@ The setup is local, no cloud, no data collection. Just you and your language lea
 - [x] Side panel (always-on-top) for start/pausing operations
 - [x] **Anki-based** word review session
 - [x] Home: Challenge generator
-- [x] Mock database for test runs: ```python app_integrated.py --use-mock```
+- [x] Mock database for test runs: ```python main.py --use-mock```
 - [ ] Home: "What you learned" summaries
 - [ ] Lite/Detailed mode: AI gives brief definition (faster) or explains word in detail
 - [ ] EasyOCR integration because Powertoys OCR messed it up sometimes
@@ -35,6 +35,10 @@ The setup is local, no cloud, no data collection. Just you and your language lea
 
 - **Python** for core logic
 - **Ollama**: Qwen
+
+## Installation guide
+
+Please refer to the [GUIDE.md](./GUIDE.md) file
 
 ## Features (in progress)
 

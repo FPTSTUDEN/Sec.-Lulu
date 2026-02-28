@@ -189,7 +189,6 @@ class HomeFrame(ctk.CTkFrame):
         super().__init__(master, **kwargs)
         self.ai = ai_client
         self.db = db
-        self.insight_text.configure(font=("Mengshen-Handwritten", 14))
         self.is_generating = False
         
         # Title
@@ -204,6 +203,7 @@ class HomeFrame(ctk.CTkFrame):
         self.insight_title.pack(pady=5)
         
         self.insight_text = ctk.CTkLabel(self.insight_card, text="Click 'New Challenge' to generate a challenge", wraplength=400)
+        self.insight_text.configure(font=("Mengshen-Handwritten", 14))
         self.insight_text.pack(pady=10, padx=10)
 
         # Refresh Button for AI
