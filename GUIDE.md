@@ -20,6 +20,7 @@ Download from [ollama.ai](https://ollama.ai), then run:
 
 ```bash
 ollama pull qwen2.5:7b # You can change OllamaClient(model="your_preferred_model") in lib/localai.py and pull another model if you want
+ollama create xiaoxi -f Modelfile
 ```
 
 <!-- Keep this running in a separate terminal. -->

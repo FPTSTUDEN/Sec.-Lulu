@@ -15,6 +15,36 @@ from lib.learner_prompts import get_prompt, get_short_prompt
 from lib.localai import OllamaClient
 from mock_database_generator import MockDatabaseGenerator
 
+def parse_cedict_line(line):
+    if line.startswith("#"):
+        return None
+    
+    trad, simp, rest = line.split(" ", 2)
+    pinyin = rest.split("]")[0][1:]
+    defs = rest.split("/")[1:-1]
+    
+    return {
+        "traditional": trad,
+        "simplified": simp,
+        "pinyin": pinyin,
+        "definitions": defs
+    }
+def lookup_cedict(word, entries):
+    '''Returns the definition for a given word. If the word is not found, returns definitions of individual characters.'''
+    for entry in entries:
+        if entry["simplified"] == word or entry["traditional"] == word:
+            return entry, []
+    # If not found, try character-level lookup
+    char_matches = []
+    for char in word:
+        for entry in entries:
+            if entry["simplified"] == char or entry["traditional"] == char:
+                char_matches.append((char, entry))
+                break
+    return None, char_matches
+    
+with open("cedict_ts.u8", encoding="utf-8") as f:
+    entries = [parse_cedict_line(l) for l in f if parse_cedict_line(l)]
 
 class IntegratedApp:
     """Main application that coordinates ControlPanel and VocabApp"""
@@ -83,42 +113,51 @@ class IntegratedApp:
                 print(f"Generating detailed explanation for '{text}' (review count: {frequency})...")
                 # exit()
                 return self.ai.get_word_explanation(text, frequency, get_prompt)
-            else:
+            elif self.control_panel and self.control_panel.response_mode == "simple":
                 print(f"Generating concise explanation for '{text}'...")
                 # exit()
                 return self.ai.get_word_explanation(text, frequency, get_short_prompt)
+            else:
+                print(f"Generating explanation for '{text}' in lookup-only mode...")
+                word_match, char_matches = lookup_cedict(text, entries)
+                if word_match:
+                    return f"{word_match['simplified']} ({word_match['traditional']}), Definitions: {'; '.join(word_match['definitions'])}"
+                elif char_matches:
+                    char_info = []
+                    for char, entry in char_matches:
+                        char_info.append(f"{char}: {entry['simplified']} ({entry['traditional']}), Definitions: {'; '.join(entry['definitions'])}")
+                    return f"No direct match for '{text}'. Character breakdown:\n" + "\n".join(char_info)
         finally:
             db.close()
     
     def _show_explanation_popup(self, text, explanation):
-        """Show explanation in separate thread to avoid blocking main loop"""
-        def show_popup():
-            response_popup = Long_message_popup("Explanation", explanation)
-            
-            def save_word():
-                # Create a fresh database connection for this thread
+        """Show explanation on the main thread using the ControlPanel's loop"""
+        # Create the popup using the ControlPanel as the master
+        response_popup = Long_message_popup("Explanation", explanation, master=self.control_panel.root)
+        
+        def save_word():
+            # You CAN keep the DB logic in a thread if it's slow
+            def db_task():
                 db = self.db_cls(self.db_path)
                 try:
-                    word_id = db.get_word_id(text) # variable used to check if word exists
-                    if word_id is not None:
-                        print(f"'{text}' already exists in the database.")
+                    word_id = db.get_word_id(text)
+                    if word_id:
                         db.update_review(word_id, 3)
                     else:
                         db.add_word(text, explanation[:100], explanation[:100])
-                        print(f"Saved: {text}")
                 finally:
                     db.close()
-                response_popup.long_popup.destroy()
+                    # Close UI back on main thread
+                    self.control_panel.root.after(0, response_popup.long_popup.destroy)
             
-            def close_popup():
-                response_popup.long_popup.destroy()
-            
-            response_popup.add_button("Save/Update word", save_word)
-            # response_popup.add_button("Close", close_popup)
-            response_popup.show()
+            threading.Thread(target=db_task, daemon=True).start()
+
+        response_popup.add_button("Save/Update word", save_word)
+        response_popup.show()
+                # # refresh control panel
+                # if self.control_panel:
+                #     self.control_panel.refresh_word_list()
         
-        thread = threading.Thread(target=show_popup, daemon=True)
-        thread.start()
     
     def _poll_clipboard(self):
         """Poll clipboard for Chinese text - called via control_panel.root.after()"""

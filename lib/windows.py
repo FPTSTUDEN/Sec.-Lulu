@@ -3,7 +3,7 @@ import tkinter.messagebox as tkmb
 import customtkinter
 import os
 import threading
-from lib.localai import OllamaClient
+# from lib.localai import OllamaClient
 current_folder = os.path.dirname(os.path.abspath(__file__))
 # customtkinter.FontManager.load_font(os.path.join(current_folder, "Mengshen-HanSerif.ttf"))
 customtkinter.FontManager.load_font(os.path.join(current_folder, "Mengshen-Handwritten.ttf"))
@@ -13,32 +13,28 @@ def popup_message(title, message):
     tkmb.showinfo(title, message)
     root.destroy()
 class Long_message_popup:
-    def __init__(self, title, message):
-        long_popup = customtkinter.CTk()
-        long_popup.geometry("600x300")
-        # Title in bold with custom font
-        title_label = customtkinter.CTkLabel(long_popup, text=title, font=("Mengshen-Handwritten", 20, "bold"))
+    def __init__(self, title, message, master=None):
+        # Use Toplevel and link it to the master (ControlPanel)
+        self.long_popup = customtkinter.CTkToplevel(master)
+        self.long_popup.geometry("600x300")
+        self.long_popup.title(title)
+        
+        # Ensure it stays on top
+        self.long_popup.attributes("-topmost", True)
+        
+        title_label = customtkinter.CTkLabel(self.long_popup, text=title, font=("Mengshen-Handwritten", 24, "bold"))
         title_label.pack(pady=(5, 5))
-        # Message in scrollable text box with custom font
-        text_box = customtkinter.CTkTextbox(long_popup, wrap="word", font=("Mengshen-Handwritten", 16))
+        
+        text_box = customtkinter.CTkTextbox(self.long_popup, wrap="word", font=("Mengshen-Handwritten", 20))
         text_box.insert("1.0", message)
-        text_box.configure(state="disabled")  # Make it read-only
+        text_box.configure(state="disabled")
         text_box.pack(padx=20, pady=10, fill="both", expand=True)
-        # label = customtkinter.CTkLabel(long_popup, text=message, wraplength=380, font=("Mengshen-Handwritten", 12))
-        # label.pack(pady=20)
-        self.long_popup = long_popup
-        self.app_callback = None # Placeholder for potential future callback functionality
+
     def show(self):
-        # display on top
-        self.long_popup.wm_attributes("-topmost", True)
-        # start the main loop to display the popup
-        self.long_popup.mainloop()
-        # After the popup is closed, you could trigger a callback here if needed
-        if self.app_callback:
-            self.app_callback()
+        # No mainloop here! Toplevel uses the master's loop.
+        self.long_popup.focus_set()
+
     def add_button(self, text, command):
-        if command is None:
-            command = self.long_popup.destroy
         btn = customtkinter.CTkButton(self.long_popup, text=text, command=command)
         btn.pack(pady=10)
 import customtkinter as ctk
@@ -49,7 +45,9 @@ class ControlPanel:
         self.opened = False
         self.done = False
         self.app_callback = app_callback
-        self.response_mode="simple" # or "detailed" for more verbose status updates
+        self.response_mode="simple" 
+        # or "detailed" for more verbose status updates
+        # or "lookup_only" for minimal output (e.g., just the word explanation without status messages)
         
         self.root = ctk.CTk()
         self.root.title("Monitor")
@@ -58,7 +56,7 @@ class ControlPanel:
         # --- Mode changing buttons ---
         self.mode_btn = ctk.CTkButton(
             self.root, 
-            text="Switch to Detailed Mode", 
+            text="Simple mode enabled",
             command=self.toggle_mode
         )
         self.mode_btn.pack(side="top", fill="x", padx=10, pady=5)
@@ -103,12 +101,16 @@ class ControlPanel:
         """Switches between Simple and Detailed response modes"""
         if self.response_mode == "simple":
             self.response_mode = "detailed"
-            self.mode_btn.configure(text="Switch to Simple Mode")
+            self.mode_btn.configure(text="Detailed mode enabled")
             print("Response Mode: Detailed (verbose status updates enabled)")
+        elif self.response_mode == "detailed":
+            self.response_mode = "lookup_only"
+            self.mode_btn.configure(text="Lookup-Only mode enabled")
+            print("Response Mode: Lookup-Only (minimal output)")
         else:
             self.response_mode = "simple"
-            self.mode_btn.configure(text="Switch to Detailed Mode")
-            print("Response Mode: Simple (minimal status updates)")
+            self.mode_btn.configure(text="Simple mode enabled")
+            print("Response Mode: Simple (default status updates)")
     def open_app(self):
         """Triggers the main App launch without blocking the control panel"""
         if self.app_callback:

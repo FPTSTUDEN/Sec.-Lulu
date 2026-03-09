@@ -1,8 +1,8 @@
 import requests
 import json
-
+#qwen2.5:7b
 class OllamaClient:
-    def __init__(self, model="qwen2.5:7b", host="http://localhost:11434"):
+    def __init__(self, model="xiaoxi", host="http://localhost:11434"):
         self.host = host
         self.model = model
         self.url = f"{self.host}/api/generate"
@@ -16,6 +16,7 @@ class OllamaClient:
         }
         
         try:
+            print(f"Sending prompt to Ollama... {prompt}")
             response = requests.post(self.url, json=payload)
             
             if response.status_code == 200:

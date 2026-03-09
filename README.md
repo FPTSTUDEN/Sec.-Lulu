@@ -19,8 +19,9 @@ The setup is local, no cloud, no data collection. Just you and your language lea
 **To-Do:**
 
 - [x] **Anki-based** word review session
-- [x] Home: Challenge generator
-- [ ] Personality-rich **AI profile**, flexibly blending both languages
+- [x] Personality-rich **AI profile**, flexibly blending both languages
+- [ ] Optimizing Ollama for speed
+- [ ] Panel lagging when response is being generated
 - [ ] Home: "What you learned" summaries
 - [ ] EasyOCR integration because Powertoys OCR messed it up sometimes
 - [ ] PaddleOCR integration
