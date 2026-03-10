@@ -207,10 +207,14 @@ class IntegratedApp:
         try:
             # Change to script directory for database access
             os.chdir(os.path.dirname(os.path.abspath(__file__)))
+            # Start pre-loading in the background on startup
+            threading.Thread(target=lambda: self.ai.manage_model("load"), daemon=True).start()
             
-            # Create control panel with callback to launch app
-            self.control_panel = ControlPanel(app_callback=self.launch_vocab_app)
-            
+            # Pass the AI client so the UI can trigger unloads
+            self.control_panel = ControlPanel(
+                app_callback=self.launch_vocab_app, 
+                ai_client=self.ai
+            )
             print("=" * 50)
             print("Integrated Vocabulary Learning System")
             print("=" * 50)
@@ -218,7 +222,15 @@ class IntegratedApp:
             print("Click 'Start' to begin clipboard monitoring")
             print("Click 'Open Main App' to launch the vocabulary reviewer")
             print("=" * 50)
-            
+            def initial_load():
+                self.control_panel.update_ai_status("Loading Model...", "orange")
+                if self.ai.manage_model("load"):
+                    self.control_panel.update_ai_status("Ready (GPU)", "green")
+                else:
+                    self.control_panel.update_ai_status("Load Failed", "red")
+
+            # Start the pre-load thread
+            threading.Thread(target=initial_load, daemon=True).start()
             # Start clipboard polling integrated with ControlPanel's event loop
             self.control_panel.root.after(0, self._poll_clipboard)
             

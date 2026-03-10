@@ -6,7 +6,26 @@ class OllamaClient:
         self.host = host
         self.model = model
         self.url = f"{self.host}/api/generate"
-
+    def manage_model(self, action="load"):
+        """
+        Loads or unloads the model from VRAM.
+        action="load": keep_alive=-1 (stays forever)
+        action="unload": keep_alive=0 (leaves immediately)
+        """
+        # Setting keep_alive to 0 with an empty prompt unloads the model
+        keep_alive = -1 if action == "load" else 0
+        payload = {
+            "model": self.model,
+            "prompt": "", 
+            "keep_alive": keep_alive
+        }
+        try:
+            print(f"Action '{action}' sent to Ollama for model '{self.model}'...")
+            response=requests.post(self.url, json=payload, timeout=60)
+            return response.status_code == 200
+        except Exception as e:
+            print(f"Model management failed: {e}")
+            return False
     def generate_response(self, prompt):
         """Yields text chunks from Ollama in real-time."""
         payload = {

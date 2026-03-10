@@ -45,7 +45,8 @@ class Long_message_popup:
 import customtkinter as ctk
 
 class ControlPanel:
-    def __init__(self, app_callback=None): 
+    def __init__(self, app_callback=None, ai_client=None): 
+        self.ai = ai_client
         # app_callback is a function passed from your main script to launch App()
         self.opened = False
         self.done = False
@@ -58,6 +59,21 @@ class ControlPanel:
         self.root.title("Monitor")
         self.root.resizable(width=False, height=False)
         self.root.wm_attributes("-topmost", True)
+        # AI Status Label
+        self.status_label = ctk.CTkLabel(
+            self.root, 
+            text="AI Status: Unknown", 
+            text_color="gray"
+        )
+        self.status_label.pack(side="top", fill="x", padx=10, pady=5)
+        # --- Unload Model Button ---
+        self.unload_btn = ctk.CTkButton(
+            self.root, 
+            text="Unload Model (Free VRAM)", 
+            fg_color="#4a4a4a", 
+            command=self.unload_ai
+        )
+        self.unload_btn.pack(side="top", fill="x", padx=10, pady=5)
         # --- Mode changing buttons ---
         self.mode_btn = ctk.CTkButton(
             self.root, 
@@ -92,16 +108,28 @@ class ControlPanel:
             command=self.cancel
         )
         self.exit_btn.pack(side="top", fill="x", padx=10, pady=5)
-
+    def update_ai_status(self, status_text, color):
+        """Thread-safe UI update for AI status"""
+        self.root.after(0, lambda: self.status_label.configure(
+            text=f"AI Status: {status_text}", 
+            text_color=color
+        ))
+    def unload_ai(self):
+        """Calls the AI client to clear VRAM"""
+        def task():
+            self.update_ai_status("Unloading...", "orange")
+            if self.ai.manage_model("unload"):
+                self.update_ai_status("Unloaded (VRAM Free)", "gray")
+        threading.Thread(target=task, daemon=True).start()
     def toggle_state(self):
         """Switches between Start and Pause states"""
         self.opened = not self.opened
         if self.opened:
             self.state_btn.configure(text="Pause", fg_color="orange")
-            print("Status: Running")
+            self.update_ai_status("Running", "green")
         else:
             self.state_btn.configure(text="Start", fg_color="green")
-            print("Status: Paused")
+            self.update_ai_status("Paused", "gray")
     def toggle_mode(self):
         """Switches between Simple and Detailed response modes"""
         if self.response_mode == "simple":
