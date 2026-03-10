@@ -25,11 +25,16 @@ class Long_message_popup:
         title_label = customtkinter.CTkLabel(self.long_popup, text=title, font=("Mengshen-Handwritten", 24, "bold"))
         title_label.pack(pady=(5, 5))
         
-        text_box = customtkinter.CTkTextbox(self.long_popup, wrap="word", font=("Mengshen-Handwritten", 20))
-        text_box.insert("1.0", message)
-        text_box.configure(state="disabled")
-        text_box.pack(padx=20, pady=10, fill="both", expand=True)
-
+        self.text_box = customtkinter.CTkTextbox(self.long_popup, wrap="word", font=("Mengshen-Handwritten", 20))
+        self.text_box.insert("1.0", message)
+        self.text_box.configure(state="disabled")
+        self.text_box.pack(padx=20, pady=10, fill="both", expand=True)
+    def append_text(self, new_text):
+        """Thread-safe way to add text to the box."""
+        self.text_box.configure(state="normal")
+        self.text_box.insert("end", new_text)
+        self.text_box.configure(state="disabled")
+        self.text_box.see("end") # Auto-scroll to bottom
     def show(self):
         # No mainloop here! Toplevel uses the master's loop.
         self.long_popup.focus_set()

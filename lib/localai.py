@@ -7,32 +7,29 @@ class OllamaClient:
         self.model = model
         self.url = f"{self.host}/api/generate"
 
-    def generate_response(self, prompt, stream=False):
-        """Sends a prompt to the local Ollama instance and returns the text response."""
+    def generate_response(self, prompt):
+        """Yields text chunks from Ollama in real-time."""
         payload = {
             "model": self.model,
             "prompt": prompt,
-            "stream": stream
+            "stream": True  # Force streaming
         }
         
         try:
-            print(f"Sending prompt to Ollama... {prompt}")
-            response = requests.post(self.url, json=payload)
+            # Use stream=True in the requests call
+            response = requests.post(self.url, json=payload, stream=True)
             
-            if response.status_code == 200:
-                return response.json().get('response', '')
-            else:
-                return f"Error: {response.status_code} - {response.text}"
-        except requests.exceptions.ConnectionError:
-            return "Could not connect to Ollama. Ensure the server is running on localhost:11434."
+            for line in response.iter_lines():
+                if line:
+                    chunk = json.loads(line.decode('utf-8'))
+                    token = chunk.get('response', '')
+                    yield token  # Yield each piece of text
+                    if chunk.get('done', False):
+                        break
+        except Exception as e:
+            yield f"\n[Error: {e}]"
 
     def get_word_explanation(self, text, frequency, prompt_generator_func):
-        """
-        Specialized method for vocabulary learning.
-        Uses a prompt generator function to format the request.
-        """
-        # prompt_generator_func refers to logic like get_prompt(text, frequency)
+        """Now returns a generator instead of a static string."""
         prompt = prompt_generator_func(text, frequency)
-        # print(prompt)
-        # exit()
         return self.generate_response(prompt)

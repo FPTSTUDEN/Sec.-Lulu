@@ -130,34 +130,37 @@ class IntegratedApp:
         finally:
             db.close()
     
-    def _show_explanation_popup(self, text, explanation):
-        """Show explanation on the main thread using the ControlPanel's loop"""
-        # Create the popup using the ControlPanel as the master
-        response_popup = Long_message_popup("Explanation", explanation, master=self.control_panel.root)
+    def _show_explanation_popup(self, text, explanation_generator):
+        """Handles the streaming update of the popup UI."""
         
-        def save_word():
-            # You CAN keep the DB logic in a thread if it's slow
-            def db_task():
-                db = self.db_cls(self.db_path)
-                try:
-                    word_id = db.get_word_id(text)
-                    if word_id:
-                        db.update_review(word_id, 3)
-                    else:
-                        db.add_word(text, explanation[:100], explanation[:100])
-                finally:
-                    db.close()
-                    # Close UI back on main thread
-                    self.control_panel.root.after(0, response_popup.long_popup.destroy)
-            
-            threading.Thread(target=db_task, daemon=True).start()
+        # Create the popup immediately (ensure Long_message_popup is modified to allow updates)
+        # We pass empty string initially
+        response_popup = Long_message_popup("Explanation", "", master=self.control_panel.root)
+        
+        def stream_thread():
+            full_explanation = ""
+            try:
+                for chunk in explanation_generator:
+                    full_explanation += chunk
+                    # Update the UI on the main thread
+                    self.control_panel.root.after(0, lambda c=chunk: response_popup.append_text(c))
+                
+                # Once finished, enable the save button logic
+                self.control_panel.root.after(0, lambda: self._setup_save_button(response_popup, text, full_explanation))
+            except Exception as e:
+                print(f"Streaming error: {e}")
 
-        response_popup.add_button("Save/Update word", save_word)
+        threading.Thread(target=stream_thread, daemon=True).start()
         response_popup.show()
-                # # refresh control panel
-                # if self.control_panel:
-                #     self.control_panel.refresh_word_list()
-        
+
+    def _setup_save_button(self, popup, text, final_text):
+        def save_logic():
+            db = self.db_cls(self.db_path)
+            # ... (your existing save logic) ...
+            db.close()
+            popup.long_popup.destroy()
+            
+        popup.add_button("Save/Update word", save_logic)
     
     def _poll_clipboard(self):
         """Poll clipboard for Chinese text - called via control_panel.root.after()"""
@@ -191,7 +194,7 @@ class IntegratedApp:
                 print(f"{'='*50}")
                 
                 explanation = self.get_explanation(current)
-                print(f"\nExplanation:\n{explanation}\n")
+                # print(f"\nExplanation:\n{explanation}\n")
                 
                 # Show popup in separate thread
                 self._show_explanation_popup(current, explanation)
