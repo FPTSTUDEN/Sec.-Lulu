@@ -5,10 +5,11 @@
     <!-- <br> -->
 </h1>
 
-> <img align="right" alt="cover" src="./.misc/cover.png" width=25% height=25%>
+> <img align="right" alt="cover" src="./.misc/cover.jpg" width=25% height=25%>
 > Stop looking up words. Start living them.
-In the flow of reading or browsing, every unfamiliar word is an opportunity lost to the friction of switching tabs.
-Sec. Lulu - an AI language learning assistant - hopes to bridge that gap by **recording new words as you go** (clipboard or OCR), tailoring them into a **structured learning program** just for you. Instead of static dictionary entries, you receive AI-driven insights, usage examples, and creative stories that turn abstract characters into memorable concepts.
+In the flow of reading or browsing, every unfamiliar word is an opportunity lost to the friction of switching tabs.Sec. Lulu - an AI language learning assistant - hopes to bridge that gap by **recording new words as you go** (clipboard or OCR), tailoring them into a **structured learning program** just for you.
+<p>
+Instead of static dictionary entries, you receive AI-driven insights, usage examples, and creative stories that turn abstract characters into memorable concepts.</p>
 
 The setup is local, no cloud, no data collection. Just you and your language learning journey.
 
@@ -21,6 +22,7 @@ The setup is local, no cloud, no data collection. Just you and your language lea
 - [x] **Anki-based** word review session
 - [x] Personality-rich **AI profile**, flexibly blending both languages
 - [x] Optimizing Ollama for speed (keep_alive... )
+- [ ] Bunch of db.py and reviewer.py errors
 - [ ] Home: "What you learned" summaries
 - [ ] EasyOCR integration because Powertoys OCR messed it up sometimes
 - [ ] Proper UI

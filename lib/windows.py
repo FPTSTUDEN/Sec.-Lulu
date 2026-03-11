@@ -3,10 +3,21 @@ import tkinter.messagebox as tkmb
 import customtkinter
 import os
 import threading
+from PIL import Image, ImageTk
+import random
 
-from lib.localai import OllamaClient
+
 # from lib.localai import OllamaClient
 current_folder = os.path.dirname(os.path.abspath(__file__))
+repo_folder = os.path.dirname(current_folder)
+# print(f"Current folder: {current_folder}")
+# print(f"Parent folder: {repo_folder}")
+os.chdir(repo_folder)
+try:
+    from lib.localai import OllamaClient
+except ImportError as e:
+    from localai import OllamaClient
+    print(f"Error importing OllamaClient: {e}")
 # customtkinter.FontManager.load_font(os.path.join(current_folder, "Mengshen-HanSerif.ttf"))
 customtkinter.FontManager.load_font(os.path.join(current_folder, "Mengshen-Handwritten.ttf"))
 def popup_message(title, message):
@@ -15,9 +26,9 @@ def popup_message(title, message):
     tkmb.showinfo(title, message)
     root.destroy()
 class Long_message_popup:
-    def __init__(self, title, message, master=None):
+    def __init__(self, title, message, master: ControlPanel,display_image=True):
         # Use Toplevel and link it to the master (ControlPanel)
-        self.long_popup = customtkinter.CTkToplevel(master)
+        self.long_popup = customtkinter.CTkToplevel(master.root)
         self.long_popup.geometry("600x300")
         self.long_popup.title(title)
         
@@ -26,7 +37,28 @@ class Long_message_popup:
         
         title_label = customtkinter.CTkLabel(self.long_popup, text=title, font=("Mengshen-Handwritten", 24, "bold"))
         title_label.pack(pady=(5, 5))
-        
+        if display_image:
+            # Add a random image (1.png-5.png) 
+            img_num = random.randint(1, 5)
+            try:
+                img_path = os.path.join(repo_folder,".misc","long_response", f"{img_num}.png")
+                img = Image.open(img_path)
+                # img = img.resize((100, 100), Image.ANTIALIAS)
+                # get image size and scale to fit within 150x150 while maintaining aspect ratio
+                img_size = img.size
+                max_size = (150, 150)
+                # Calculate the scale factor to fit the image within the maximum size
+                scale_factor = min(max_size[0] / img_size[0], max_size[1] / img_size[1])
+                new_size = (int(img_size[0] * scale_factor), int(img_size[1] * scale_factor))
+                # img = img.resize(new_size, Image.ANTIALIAS)
+                photo = customtkinter.CTkImage(img, size=new_size)
+                img_label = customtkinter.CTkLabel(self.long_popup, image=photo,text="")
+                img_label.image = photo  # Keep a reference to avoid garbage collection # pyright: ignore
+                # pack on left side
+                img_label.pack(side="left", padx=10, pady=0)
+            except Exception as e:
+                print(f"Error loading image: {e}")
+
         self.text_box = customtkinter.CTkTextbox(self.long_popup, wrap="word", font=("Mengshen-Handwritten", 20))
         self.text_box.insert("1.0", message)
         self.text_box.configure(state="disabled")
@@ -373,6 +405,7 @@ class App(ctk.CTk):
 if __name__ == "__main__":
     popup_message("Test Message", "This is a test message to verify the popup_message function is working correctly.")
     panel=ControlPanel()
-    panel.show()
-    longpop=Long_message_popup("Test Long Message", "This is a long message to test the Long_message_popup class. It should wrap properly and use the custom font loaded from the Mengshen-Handwritten.ttf file. If you see this message clearly, it means the function is working correctly!"*5)
+    longpop=Long_message_popup("Test Long Popup", "This is a test of the long message popup. It should display this text and an image if enabled.", master=panel, display_image=True)
     longpop.show()
+    panel.show()
+    # longpop.show()

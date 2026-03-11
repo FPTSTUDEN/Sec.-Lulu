@@ -8,6 +8,7 @@ import threading
 import pyperclip
 import requests
 import time
+from PIL import Image
 from lib.windows import ControlPanel, App, Long_message_popup
 from lib.reviewer import WordReviewer
 from lib.db import VocabDatabase
@@ -135,7 +136,8 @@ class IntegratedApp:
         
         # Create the popup immediately (ensure Long_message_popup is modified to allow updates)
         # We pass empty string initially
-        response_popup = Long_message_popup("Explanation", "", master=self.control_panel.root)
+        # print(self.control_panel.response_mode)
+        response_popup = Long_message_popup("Explanation", "", master=self.control_panel, display_image=(self.control_panel.response_mode != "lookup_only"))
         
         def stream_thread():
             full_explanation = ""
