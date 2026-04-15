@@ -38,12 +38,13 @@ The setup is local, no cloud, no data collection. Just you and your language lea
 
 - [x] **Anki-based** word review session
 - [x] Home: Better "What you learned" summaries (scrollable box, update AI profile)
-- [ ] Improved challenge+summary (currently: wbloss+spark) (change to: mixed language maybe?)
-- [ ] Full Sentence mode(word pick UI: show translation + quick def +  switch to mixed language) (integrated revision, better explanation on long-complex sentences)
-- [ ] Renewed UI
 - [ ] AI flexibly blending both languages (When a volcano erupts, magma will喷出 from the volcano's口)
+- [ ] Review mode (6)
+- [ ] Full Sentence mode(word pick UI: show translation + quick def +  switch to mixed language) (integrated revision, better explanation on long-complex sentences)
+- [ ] better challenge
 - [ ] More test cases for each mode for debugging
 - [ ] More features
+- [ ] Renewed UI
 - [ ] EasyOCR integration because Powertoys OCR messed it up sometimes
 
 - [ ] Initial clipboard data isn't sent
