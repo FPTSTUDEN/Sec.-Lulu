@@ -15,6 +15,8 @@
 
 ## Goals:
 
+> most of the goals failed, apparently small consumer-grade gpu AIs (qwen 2.5:7b, wangshenzhi/llama3-8b-chinese-chat-ollama-q4) cannot handle long system prompts and mixed words well...
+
 - [ ] Blend necessary words correctly
 - [ ] Hover on swapped word: definition (pre-given by AI), learn,...
 - [ ] Do not use Opted-out/remembered words
