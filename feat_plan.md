@@ -1,8 +1,33 @@
+- Language is acquired when we UNDERSTAND the MESSAGE
 
-Goals:
+## maybe instead of individual words, try:
+
+- [ ]INTERESTING sentences (expression/... with translation)
+- [x] phrases (noun/adj)? (thousand years of ...,在dockerscontainer的里面)
+- domain-specific terms (更新 (gēng xīn - update))
+- verbs (limited)
+
+## XX Example
+
+- "Almost! 差一点点～ let's try a different tone?"
+- "That's a creative approach! 很有创意！Now let's see how native speakers would say it..."
+- "This part is tricky, even my students struggle with it. 很难对吧？But you got this!"
+
+## Goals:
 
 - [ ] Blend necessary words correctly
-- [ ] Hover on swapped word: definition, learn,...
+- [ ] Hover on swapped word: definition (pre-given by AI), learn,...
+- [ ] Do not use Opted-out/remembered words
+- [ ] On/Off toggle
+
+Sentence Whisper:
+
+- [ ] Hover: quick def
+
+Rely solely on algorithm would risk:
+
+- Grammar/ sentence structure learning
+- Whole sentences integration
 
 I love that you're leaning into the **Chinese blend method** — it turns every response into a gentle, living lesson. Here are **more advanced changes** you can make to the Modelfile (or your system prompt) that fully exploit this approach:
 
