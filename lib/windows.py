@@ -19,13 +19,6 @@ try:
 except ImportError as e:
     from localai import OllamaClient
     print(f"Error importing OllamaClient: {e}")
-try:
-    from lib.ccedict import lookup_cedict, extract_chinese_word_at_position, is_chinese_char
-except ImportError:
-    # Fallback if ccedict module is not available
-    lookup_cedict = None
-    extract_chinese_word_at_position = None
-    is_chinese_char = None
 # customtkinter.FontManager.load_font(os.path.join(current_folder, "Mengshen-HanSerif.ttf"))
 
 class ControlPanel:
@@ -41,10 +34,8 @@ class ControlPanel:
         self.opened = False
         self.done = False
         self.app_callback = app_callback
-        self.generate_callback = None  # Callback to generate explanation for clipboard text
         self.mode_index = 1
         self.response_mode = MODES[self.mode_index]
-        self.current_clipboard_text = ""  # Store the actual clipboard text
         
         self.root = ctk.CTk()
         self.root.title("Monitor")
@@ -57,19 +48,6 @@ class ControlPanel:
             text_color="gray"
         )
         self.status_label.pack(side="top", fill="x", padx=10, pady=5)
-        
-        # --- Clipboard Display (Clickable) ---
-        self.clipboard_label = ctk.CTkLabel(
-            self.root,
-            text="📋 (No clipboard text)",
-            text_color="gray",
-            wraplength=250,
-            justify="left",
-            cursor="hand2"
-        )
-        self.clipboard_label.pack(side="top", fill="x", padx=10, pady=5)
-        self.clipboard_label.bind("<Button-1>", self._on_clipboard_click)
-        
         # --- AI Control Buttons ---
         self.ai_btn = ctk.CTkButton(
             self.root, 
@@ -118,27 +96,6 @@ class ControlPanel:
             text=f"AI Status: {status_text}", 
             text_color=color
         ))
-    
-    def update_clipboard_display(self, text, is_valid_chinese=False):
-        """Update the clipboard display label. Thread-safe."""
-        self.current_clipboard_text = text
-        # Truncate to 40 chars + "..." if longer
-        display_text = text if len(text) <= 40 else text[:40] + "..."
-        # Color based on whether it's valid Chinese text
-        color = "orange" if is_valid_chinese else "gray"
-        icon = "📋" if not is_valid_chinese else "🔤"
-        self.root.after(0, lambda: self.clipboard_label.configure(
-            text=f"{icon} {display_text}",
-            text_color=color
-        ))
-    
-    def _on_clipboard_click(self, event):
-        """Handle click on clipboard display - generate explanation."""
-        if self.current_clipboard_text and self.generate_callback:
-            try:
-                self.generate_callback(self.current_clipboard_text)
-            except Exception as e:
-                tkmb.showerror("Error", f"Failed to generate explanation: {e}")
     def load_ai(self):
         """Calls the AI client to load the model into VRAM"""
         def task():
@@ -200,178 +157,49 @@ def popup_message(title, message):
     tkmb.showinfo(title, message)
     root.destroy()
 class Long_message_popup:
-    def __init__(self, title, message, master: ControlPanel, display_image=True, word_index=None, char_def_index=None):
+    def __init__(self, title, message, master: ControlPanel,display_image=True):
         # Use Toplevel and link it to the master (ControlPanel)
         self.long_popup = customtkinter.CTkToplevel(master.root)
-        self.long_popup.geometry("800x350")
+        self.long_popup.geometry("600x300")
         self.long_popup.title(title)
-        
-        # Store CEDICT indices for hover lookup
-        self.word_index = word_index or {}
-        self.char_def_index = char_def_index or {}
-        self.last_looked_up_word = None
         
         # Ensure it stays on top
         self.long_popup.attributes("-topmost", True)
         
         title_label = customtkinter.CTkLabel(self.long_popup, text=title, font=("Mengshen-Handwritten", 24, "bold"))
         title_label.pack(pady=(5, 5))
-        
-        # Main content frame (image + text + side panel)
-        content_frame = customtkinter.CTkFrame(self.long_popup, fg_color="transparent")
-        content_frame.pack(fill="both", expand=True, padx=10, pady=5)
-        
         if display_image:
             # Add a random image (1.png-5.png) 
             img_num = random.randint(1, 5)
             try:
-                img_path = os.path.join(repo_folder, ".misc", "long_response", f"{img_num}.png")
+                img_path = os.path.join(repo_folder,".misc","long_response", f"{img_num}.png")
                 img = Image.open(img_path)
+                # img = img.resize((100, 100), Image.ANTIALIAS)
+                # get image size and scale to fit within 150x150 while maintaining aspect ratio
                 img_size = img.size
                 max_size = (150, 150)
+                # Calculate the scale factor to fit the image within the maximum size
                 scale_factor = min(max_size[0] / img_size[0], max_size[1] / img_size[1])
                 new_size = (int(img_size[0] * scale_factor), int(img_size[1] * scale_factor))
+                # img = img.resize(new_size, Image.ANTIALIAS)
                 photo = customtkinter.CTkImage(img, size=new_size)
-                img_label = customtkinter.CTkLabel(content_frame, image=photo, text="")
-                img_label.image = photo
-                img_label.pack(side="left", padx=5, pady=0)
+                img_label = customtkinter.CTkLabel(self.long_popup, image=photo,text="")
+                img_label.image = photo  # Keep a reference to avoid garbage collection # pyright: ignore
+                # pack on left side
+                img_label.pack(side="left", padx=10, pady=0)
             except Exception as e:
                 print(f"Error loading image: {e}")
 
-        # Text box and side panel container
-        text_panel_frame = customtkinter.CTkFrame(content_frame, fg_color="transparent")
-        text_panel_frame.pack(side="left", fill="both", expand=True, padx=5)
-        
-        self.text_box = customtkinter.CTkTextbox(text_panel_frame, wrap="word", font=("Mengshen-Handwritten", 20))
+        self.text_box = customtkinter.CTkTextbox(self.long_popup, wrap="word", font=("Mengshen-Handwritten", 20))
         self.text_box.insert("1.0", message)
         self.text_box.configure(state="disabled")
-        self.text_box.pack(side="left", fill="both", expand=True, padx=5, pady=5)
-        
-        # Side panel for Chinese word lookup results
-        self.lookup_panel = customtkinter.CTkFrame(text_panel_frame, fg_color=("gray85", "gray25"), corner_radius=8)
-        self.lookup_panel.pack(side="right", fill="y", padx=5, pady=5, ipadx=10, ipady=10)
-        self.lookup_panel.pack_propagate(False)
-        self.lookup_panel.configure(width=180)
-        
-        lookup_title = customtkinter.CTkLabel(self.lookup_panel, text="📖 Lookup", font=("Mengshen-Handwritten", 14, "bold"), text_color="orange")
-        lookup_title.pack(pady=5)
-        
-        self.lookup_text = customtkinter.CTkTextbox(self.lookup_panel, wrap="word", font=("Mengshen-Handwritten", 12), height=120)
-        self.lookup_text.configure(state="disabled")
-        self.lookup_text.pack(fill="both", expand=True, padx=5, pady=5)
-        
-        # Bind mouse motion to text box for hover lookup
-        if lookup_cedict and extract_chinese_word_at_position:
-            self._bind_hover_events()
-    
-    def _bind_hover_events(self):
-        """Bind mouse motion events to the text box for hover-based lookup."""
-        try:
-            # Get the underlying Tkinter Text widget from CTkTextbox
-            underlying_text = self.text_box._textbox
-            underlying_text.bind("<Motion>", self._on_text_motion)
-            underlying_text.bind("<Leave>", self._on_text_leave)
-        except Exception as e:
-            print(f"Error binding hover events: {e}")
-    
-    def _on_text_motion(self, event):
-        """Handle mouse motion over text box - perform lookup on Chinese words."""
-        try:
-            # Get the underlying text widget
-            text_widget = event.widget
-            
-            # Get the character index at mouse position
-            index = text_widget.index(f"@{event.x},{event.y}")
-            if not index:
-                return
-            
-            # Extract line and column from index
-            line, col = map(int, index.split("."))
-            
-            # Get the full text to search
-            text_content = text_widget.get("1.0", "end-1c")
-            
-            # Convert line.col index to absolute position in text
-            lines = text_content.split("\n")
-            abs_pos = sum(len(lines[i]) + 1 for i in range(line - 1)) + col
-            
-            # Ensure we're within bounds
-            if abs_pos >= len(text_content):
-                return
-            
-            # Normalize position: Tkinter @x,y can land on the boundary AFTER a character.
-            # If the character at abs_pos is not Chinese but the one before it is,
-            # use abs_pos - 1 to start from the actual hovered character.
-            if abs_pos > 0 and not is_chinese_char(text_content[abs_pos]):
-                if is_chinese_char(text_content[abs_pos - 1]):
-                    abs_pos = abs_pos - 1
-            
-            # Extract the Chinese word at this position
-            word, start_pos, end_pos = extract_chinese_word_at_position(text_content, abs_pos, self.word_index)
-            
-            if word and word != self.last_looked_up_word:
-                self.last_looked_up_word = word
-                self._update_lookup_panel(word)
-        except Exception as e:
-            pass  # Silently ignore hover errors
-    
-    def _on_text_leave(self, event):
-        """Clear lookup panel when mouse leaves text box."""
-        self.last_looked_up_word = None
-        self._clear_lookup_panel()
-    
-    def _update_lookup_panel(self, word):
-        """Update the lookup panel with CEDICT information for the given word."""
-        self.lookup_text.configure(state="normal")
-        self.lookup_text.delete("1.0", "end")
-        
-        # Perform CEDICT lookup
-        word_entry, char_matches = lookup_cedict(word, self.word_index, self.char_def_index)
-        
-        if word_entry:
-            # Direct word match found
-            simplified = word_entry.get("simplified", "")
-            traditional = word_entry.get("traditional", "")
-            pinyin = word_entry.get("pinyin", "")
-            definitions = word_entry.get("definitions", [])
-            
-            # Format output
-            output = f"词: {simplified}\n"
-            if traditional != simplified:
-                output += f"繁: {traditional}\n"
-            output += f"拼: {pinyin}\n"
-            if definitions:
-                output += f"义: {'; '.join(definitions[:2])}"  # Show first 2 definitions
-            
-            self.lookup_text.insert("1.0", output)
-        elif char_matches:
-            # Character-level matches
-            output = f"词组: {word}\n\n"
-            for char, entry in char_matches[:3]:  # Show first 3 characters
-                char_pinyin = entry.get("pinyin", "")
-                char_defs = entry.get("definitions", [])
-                output += f"{char}: {char_pinyin}\n"
-                if char_defs:
-                    output += f"  {char_defs[0][:30]}\n"
-            self.lookup_text.insert("1.0", output)
-        else:
-            self.lookup_text.insert("1.0", f"未找到:\n{word}")
-        
-        self.lookup_text.configure(state="disabled")
-    
-    def _clear_lookup_panel(self):
-        """Clear the lookup panel."""
-        self.lookup_text.configure(state="normal")
-        self.lookup_text.delete("1.0", "end")
-        self.lookup_text.configure(state="disabled")
-    
+        self.text_box.pack(padx=20, pady=10, fill="both", expand=True)
     def append_text(self, new_text):
         """Thread-safe way to add text to the box."""
         self.text_box.configure(state="normal")
         self.text_box.insert("end", new_text)
         self.text_box.configure(state="disabled")
         self.text_box.see("end") # Auto-scroll to bottom
-    
     def show(self):
         # No mainloop here! Toplevel uses the master's loop.
         self.long_popup.focus_set()
