@@ -38,18 +38,32 @@ The setup is local, no cloud, no data collection. Just you and your language lea
 
 - [x] **Anki-based** word review session
 - [x] Home: Better "What you learned" summaries (scrollable box, update AI profile)
-- [ ] AI flexibly blending both languages (When a volcano erupts, magma will喷出 from the volcano's口)
-- [ ] Review mode (6)
+- [x] Improved challenge+summary  ~~(change to: mixed language maybe?)~~
+- [x] Integrated lookup mode(word hover: show translation + quick def) 
+- [x] ~~EasyOCR integration because Powertoys OCR messed it up sometimes~~ Powertoys OCR is enough for normal uses
+- [ ] No pre-load model & auto start
+- [ ] Compact design (UI)
+- [ ] **Click - save/replace with Eng word**
+- [ ] Word revision mechanism
+- [ ] Revise Modelfile: Hard sentence dealing?
+- [ ] CI/CD pipeline
+- [ ] multiple personality
+- [x] Clipboard state & Option to lookup immediately (UI)
+- [ ] Chinese mode + TTS
+- [ ] ~~Normal sentence + words mode~~
 - [ ] Full Sentence mode(word pick UI: show translation + quick def +  switch to mixed language) (integrated revision, better explanation on long-complex sentences)
-- [ ] better challenge
-- [ ] More test cases for each mode for debugging
-- [ ] More features
-- [ ] Renewed UI
-- [ ] EasyOCR integration because Powertoys OCR messed it up sometimes
 
+- [ ] More test cases for each mode for debugging
+- [ ] Recall & discuss on previous words (mempalace?)
+- [ ] CHENGYU study
+- [ ] Renewed UI
+- [ ] ~~AI flexibly blending both languages (When a volcano erupts, magma will喷出 from the volcano's口)~~
+
+- [ ] Unintended usage: sparkle on long word/fragmented sentences...
+- [ ] (integrated revision, better explanation on long-complex sentences)
 - [ ] Initial clipboard data isn't sent
+- [ ] **Lookup-only No direct match results are wrong (displaying idioms with respective characters for some reason)**
 - [ ] Card UI
-- [ ] TTS
 - [ ] Bunch of db.py and reviewer.py errors
 - [ ] Removing None from ControlPanel breaks everything
 

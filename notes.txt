@@ -1,3 +1,36 @@
+就是腿折了 (jiù shì tuǐ zhé le) is a Chinese phrase that literally translates to "it's just that my legs 
+are broken." However, the context and usage can be quite different from its literal meaning. Here’s how you 
+might interpret it:
+
+### Literal Meaning:
+- **就是** (jiù shì): means "just," indicating something simple or straightforward.
+- **腿折了** (tuǐ zhé le): means "my legs are broken."
+
+So, literally put together, "it's just that my legs are broken" would imply a physical injury.
+
+### Figurative Meaning:
+In colloquial Chinese usage, this phrase is often used to downplay or minimize something. It can be seen as 
+a way of saying:
+
+- **It’s nothing serious**: *我这就过来了，就是腿折了* (Wǒ zhè jiù guò lái le, jiù shì tuǐ zhé le) — "I’m 
+coming over now; it's just that my legs are broken."
+  
+  In this context, the speaker might be using an exaggerated phrase to make a situation seem less severe or 
+more trivial.
+
+- **Just something minor**: *这件事就只是腿折了* (Zhège shì jing jiù zhǐ shì tuǐ zhé le) — "This thing is 
+just that my legs are broken."
+
+  Here, the speaker might be minimizing an issue by using this phrase to indicate it’s not a big deal.
+
+### Example Usage in Context:
+- **客户问你为什么迟到** (Kè hú wèn nǐ wèi shén me chídào) — "The customer asks you why you are late."
+  - **你可以说：就是腿折了，我在路上崴了一下。** (Nǐ kě yuē: jiù shì tuǐ zhé le, wǒ zài lù shàng wǎi zhe yī 
+xià.) — "It's just that my legs are broken; I twisted them while walking on the road."
+
+In summary, 就是腿折了 is often used to downplay or minimize a situation by making an exaggerated 
+statement. If you need more specific examples tailored to your context, feel free to provide more details!
+
 Instead of manually typing IDs, your UI should:
 
 Store word_id internally

@@ -14,38 +14,11 @@ from lib.reviewer import WordReviewer
 from lib.db import VocabDatabase
 from lib.learner_prompts import get_prompt, prompt_generator_for_mode
 from lib.localai import OllamaClient
+from lib.ccedict import load_cedict_entries, lookup_cedict
 from mock_database_generator import MockDatabaseGenerator
 
-def parse_cedict_line(line):
-    if line.startswith("#"):
-        return None
-    
-    trad, simp, rest = line.split(" ", 2)
-    pinyin = rest.split("]")[0][1:]
-    defs = rest.split("/")[1:-1]
-    
-    return {
-        "traditional": trad,
-        "simplified": simp,
-        "pinyin": pinyin,
-        "definitions": defs
-    }
-def lookup_cedict(word, entries):
-    '''Returns the definition for a given word. If the word is not found, returns definitions of individual characters.'''
-    for entry in entries:
-        if entry["simplified"] == word or entry["traditional"] == word:
-            return entry, []
-    # If not found, try character-level lookup
-    char_matches = []
-    for char in word:
-        for entry in entries:
-            if entry["simplified"] == char or entry["traditional"] == char:
-                char_matches.append((char, entry))
-                break
-    return None, char_matches
-    
-with open("cedict_ts.u8", encoding="utf-8") as f:
-    entries = [parse_cedict_line(l) for l in f if parse_cedict_line(l)]
+# Load CEDICT entries and build indices at startup
+_, word_index, char_index, char_def_index = load_cedict_entries("cedict_ts.u8")
 
 class IntegratedApp:
     """Main application that coordinates ControlPanel and VocabApp"""
@@ -66,6 +39,10 @@ class IntegratedApp:
         self.last_clipboard_text = ""
         self.control_panel = None
         self.ai = OllamaClient()
+        # Store CEDICT indices for use in get_explanation
+        self.word_index = word_index
+        self.char_index = char_index
+        self.char_def_index = char_def_index
     
     def launch_vocab_app(self):
         """Launch the vocabulary learning app in a separate thread"""
@@ -116,7 +93,7 @@ class IntegratedApp:
 
             if mode == "Lookup Only":
                 print(f"Generating explanation for '{text}' in lookup-only mode...")
-                word_match, char_matches = lookup_cedict(text, entries)
+                word_match, char_matches = lookup_cedict(text, self.word_index, self.char_def_index)
                 if word_match:
                     return f"{word_match['simplified']} ({word_match['traditional']}), Definitions: {'; '.join(word_match['definitions'])}"
                 elif char_matches:
@@ -143,6 +120,8 @@ class IntegratedApp:
             "",
             master=self.control_panel,
             display_image=(self.control_panel.response_mode.lower() != "lookup only"),
+            word_index=self.word_index,
+            char_def_index=self.char_def_index,
         )
         
         def stream_thread():
@@ -170,6 +149,14 @@ class IntegratedApp:
             
         popup.add_button("Save/Update word", save_logic)
     
+    def _generate_for_word(self, text):
+        """Generate explanation for a word and display in popup."""
+        explanation = self.get_explanation(text)
+        # Wrap string explanation in a generator if needed
+        if isinstance(explanation, str):
+            explanation = (explanation,)
+        self._show_explanation_popup(text, explanation)
+    
     def _poll_clipboard(self):
         """Poll clipboard for Chinese text - called via control_panel.root.after()"""
         if not self.control_panel or getattr(self.control_panel, "done", False):
@@ -184,28 +171,33 @@ class IntegratedApp:
         # If monitoring is paused
         if not getattr(self.control_panel, "opened", True):
             self.last_clipboard_text = current or ""
+            # Update display even when paused
+            if current:
+                is_chinese = any('\u4e00' <= ch <= '\u9fff' for ch in current)
+                self.control_panel.update_clipboard_display(current, is_chinese)
             self.control_panel.root.after(1000, self._poll_clipboard)
             return
         
         # Initialize last_clipboard_text
         if self.last_clipboard_text == "":
             self.last_clipboard_text = current or ""
+            if current:
+                is_chinese = any('\u4e00' <= ch <= '\u9fff' for ch in current)
+                self.control_panel.update_clipboard_display(current, is_chinese)
             self.control_panel.root.after(1000, self._poll_clipboard)
             return
         
-        # Check for new Chinese text
+        # Check for new text
         if current and current != self.last_clipboard_text:
             self.last_clipboard_text = current
-            if any('\u4e00' <= ch <= '\u9fff' for ch in (current or "")):
+            is_chinese = any('\u4e00' <= ch <= '\u9fff' for ch in current)
+            self.control_panel.update_clipboard_display(current, is_chinese)
+            
+            if is_chinese:
                 print(f"\n{'='*50}")
                 print(f"Detected: {current}")
                 print(f"{'='*50}")
-                
-                explanation = self.get_explanation(current)
-                # print(f"\nExplanation:\n{explanation}\n")
-                
-                # Show popup in separate thread
-                self._show_explanation_popup(current, explanation)
+                self._generate_for_word(current)
         
         # Schedule next poll
         self.control_panel.root.after(1000, self._poll_clipboard)
@@ -223,6 +215,8 @@ class IntegratedApp:
                 app_callback=self.launch_vocab_app, 
                 ai_client=self.ai
             )
+            # Set the callback for generating explanations when clipboard is clicked
+            self.control_panel.generate_callback = self._generate_for_word
             print("=" * 50)
             print("Integrated Vocabulary Learning System")
             print("=" * 50)
