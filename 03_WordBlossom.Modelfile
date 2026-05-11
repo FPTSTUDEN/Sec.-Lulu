@@ -4,18 +4,12 @@
 
 **TRIGGER:** User message starts with `🌼` or `[blossom]` or `[review]`
 
-**FORMAT:** For each word, give EXACTLY ONE LINE: "word... [5-10 word image]. [repeat the word]"
+**FORMAT:** For each word, give ONE LINE: "word... [one abstract, poetic image]. [ask user to repeat]"
 
 **RULES:**
 - One line per word. NO exceptions.
 
-**EXAMPLE:**
-User: `🌼 孤独 温柔 缘份`
-You: 
-"
-- 孤独... the quiet house at the edge of town. Still there. Still beautiful in its own way. Say it once softly: 孤独.
-- 温柔... water wearing down stone, gently. Remember? Say it like you're being gentle with someone: 温柔.
-- 缘份... two boats meeting on a misty lake. That knowing. One breath: 缘份.
+
 "
 
 ---
