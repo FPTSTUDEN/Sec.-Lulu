@@ -1,4 +1,5 @@
 import tkinter as tk
+import tkinter.font as tkfont
 import tkinter.messagebox as tkmb
 import customtkinter
 import os
@@ -48,89 +49,124 @@ class ControlPanel:
         
         self.root = ctk.CTk()
         self.root.title("Monitor")
-        self.root.resizable(width=False, height=False)
+        self.root.resizable(width=True, height=True)
         self.root.wm_attributes("-topmost", True)
-        # AI Status Label
-        self.status_label = ctk.CTkLabel(
-            self.root, 
-            text="AI Status: Unknown", 
-            text_color="gray"
-        )
-        self.status_label.pack(side="top", fill="x", padx=10, pady=5)
-        
-        # --- Clipboard Display (Clickable) ---
-        self.clipboard_label = ctk.CTkLabel(
-            self.root,
-            text="📋 (No clipboard text)",
+        self.status_text = "Unknown"
+
+        # --- Top line: status + clipboard ---
+        self.top_line_frame = ctk.CTkFrame(self.root, fg_color="transparent")
+        self.top_line_frame.pack(side="top", fill="x", padx=10, pady=5)
+
+        self.top_line_label = ctk.CTkLabel(
+            self.top_line_frame,
+            text="AI Unknown, 📋 (No clipboard text)",
             text_color="gray",
-            wraplength=250,
+            anchor="w",
             justify="left",
             cursor="hand2"
         )
-        self.clipboard_label.pack(side="top", fill="x", padx=10, pady=5)
-        self.clipboard_label.bind("<Button-1>", self._on_clipboard_click)
-        
-        # --- AI Control Buttons ---
-        self.ai_btn = ctk.CTkButton(
-            self.root, 
-            text="Unload Model (Free VRAM)", 
-            fg_color="#4a4a4a", 
-            command=self.toggle_ai
-        )
-        self.ai_btn.pack(side="top", fill="x", padx=10, pady=5)
-        # --- Mode changing buttons ---
-        self.mode_btn = ctk.CTkButton(
-            self.root, 
-            text=f"Mode: {self.response_mode}",
-            command=self.toggle_mode
-        )
-        self.mode_btn.pack(side="top", fill="x", padx=10, pady=5)
+        self.top_line_label.pack(side="left", fill="x", expand=True)
+        self.top_line_label.bind("<Button-1>", self._on_clipboard_click)
 
-        # --- Responsive Start/Pause Button ---
+        self.top_line_font = tkfont.Font(font=self.top_line_label.cget("font"))
+
+        # --- Buttons Frame ---
+        self.buttons_frame = ctk.CTkFrame(self.root, fg_color="transparent")
+        self.buttons_frame.pack(side="top", fill="x", padx=10, pady=5)
+
         self.state_btn = ctk.CTkButton(
-            self.root, 
-            text="Start", 
-            fg_color="green", 
+            self.buttons_frame,
+            text="▶️",
+            fg_color="green",
+            width=50,
             command=self.toggle_state
         )
-        self.state_btn.pack(side="top", fill="x", padx=10, pady=5)
-        
-        # --- Open Main App Button ---
+        self.state_btn.pack(side="left", padx=5)
+
         self.app_btn = ctk.CTkButton(
-            self.root, 
-            text="Open Main App", 
+            self.buttons_frame,
+            text="📱",
+            width=50,
             command=self.open_app
         )
-        self.app_btn.pack(side="top", fill="x", padx=10, pady=5)
+        self.app_btn.pack(side="left", padx=5)
 
-        # --- Exit Button ---
+        self.advanced_visible = False
+        self.toggle_advanced_btn = ctk.CTkButton(
+            self.buttons_frame,
+            text="▼",
+            width=50,
+            command=self.toggle_advanced
+        )
+        self.toggle_advanced_btn.pack(side="left", padx=5)
+
         self.exit_btn = ctk.CTkButton(
-            self.root, 
-            text="Exit", 
-            fg_color="#942626", # Dark Red
+            self.buttons_frame,
+            text="❌",
+            fg_color="#942626",
             hover_color="#731d1d",
+            width=50,
             command=self.cancel
         )
-        self.exit_btn.pack(side="top", fill="x", padx=10, pady=5)
+        self.exit_btn.pack(side="left", padx=5)
+
+        self.advanced_frame = ctk.CTkFrame(self.root, fg_color="transparent")
+
+        self.ai_btn = ctk.CTkButton(
+            self.advanced_frame,
+            text="🤖 Unload",
+            fg_color="#4a4a4a",
+            command=self.toggle_ai
+        )
+        self.ai_btn.pack(side="top", fill="x", pady=5)
+
+        self.mode_menu = ctk.CTkOptionMenu(
+            self.advanced_frame,
+            values=MODES,
+            command=self.set_mode
+        )
+        self.mode_menu.set(self.response_mode)
+        self.mode_menu.pack(side="top", fill="x", pady=5)
+
+        self.root.bind("<Configure>", self._on_root_configure)
     def update_ai_status(self, status_text, color):
         """Thread-safe UI update for AI status"""
-        self.root.after(0, lambda: self.status_label.configure(
-            text=f"AI Status: {status_text}", 
-            text_color=color
-        ))
+        self.status_text = status_text
+        self.root.after(0, lambda: self._update_top_line(color=color))
     
     def update_clipboard_display(self, text, is_valid_chinese=False):
         """Update the clipboard display label. Thread-safe."""
         self.current_clipboard_text = text
-        # Truncate to 40 chars + "..." if longer
-        display_text = text if len(text) <= 40 else text[:40] + "..."
-        # Color based on whether it's valid Chinese text
-        color = "orange" if is_valid_chinese else "gray"
-        icon = "📋" if not is_valid_chinese else "🔤"
-        self.root.after(0, lambda: self.clipboard_label.configure(
-            text=f"{icon} {display_text}",
-            text_color=color
-        ))
+        self.clipboard_is_chinese = is_valid_chinese
+        self.root.after(0, lambda: self._update_top_line())
+
+    def _update_top_line(self, color=None):
+        status_text = self.status_text or "Unknown"
+        clip_text = self.current_clipboard_text or "(No clipboard text)"
+        icon = "🔤" if getattr(self, 'clipboard_is_chinese', False) else "📋"
+        base_text = f"AI {status_text}, {icon} "
+
+        label_width = self.top_line_label.winfo_width() or self.top_line_frame.winfo_width()
+        if label_width <= 0:
+            self.top_line_label.configure(text=base_text + clip_text, text_color=color or "gray")
+            return
+
+        ellipsis = "..."
+        available_pixels = max(label_width - self.top_line_font.measure(base_text + ellipsis) - 10, 0)
+        clipped_text = clip_text
+        if self.top_line_font.measure(clip_text) > available_pixels:
+            clipped_text = ""
+            for i in range(len(clip_text)):
+                if self.top_line_font.measure(clip_text[:i + 1]) > available_pixels:
+                    clipped_text = clip_text[:i] + ellipsis
+                    break
+            if not clipped_text:
+                clipped_text = ellipsis
+
+        self.top_line_label.configure(text=base_text + clipped_text, text_color=color or "gray")
+
+    def _on_root_configure(self, event):
+        self._update_top_line()
     
     def _on_clipboard_click(self, event):
         """Handle click on clipboard display - generate explanation."""
@@ -158,26 +194,35 @@ class ControlPanel:
         if self.ai_opened:
             self.unload_ai()
             self.ai_opened = False
-            self.ai_btn.configure(text="Load Model (Use VRAM)", fg_color="#4a4a4a")
+            self.ai_btn.configure(text="🤖 Load", fg_color="#4a4a4a")
         else:
             self.load_ai()
             self.ai_opened = True
-            self.ai_btn.configure(text="Unload Model (Free VRAM)", fg_color="#4a4a4a")
+            self.ai_btn.configure(text="🤖 Unload", fg_color="#4a4a4a")
     def toggle_state(self):
         """Switches between Start and Pause states"""
         self.opened = not self.opened
         if self.opened:
-            self.state_btn.configure(text="Pause", fg_color="orange")
+            self.state_btn.configure(text="⏸️", fg_color="orange")
             self.update_ai_status("Running", "green")
         else:
-            self.state_btn.configure(text="Start", fg_color="green")
+            self.state_btn.configure(text="▶️", fg_color="green")
             self.update_ai_status("Paused", "gray")
-    def toggle_mode(self):
-        """Rotate through the available response modes."""
-        self.mode_index = (self.mode_index + 1) % len(MODES)
-        self.response_mode = MODES[self.mode_index]
-        self.mode_btn.configure(text=f"Mode: {self.response_mode}")
+    def set_mode(self, mode):
+        """Set the response mode from dropdown."""
+        self.response_mode = mode
         print(f"Response Mode: {self.response_mode}")
+    
+    def toggle_advanced(self):
+        """Toggle visibility of advanced options."""
+        if self.advanced_visible:
+            self.advanced_frame.pack_forget()
+            self.toggle_advanced_btn.configure(text="▼")
+            self.advanced_visible = False
+        else:
+            self.advanced_frame.pack(after=self.buttons_frame, side="top", fill="x", padx=10, pady=5)
+            self.toggle_advanced_btn.configure(text="▲")
+            self.advanced_visible = True
     def open_app(self):
         """Triggers the main App launch without blocking the control panel"""
         if self.app_callback:
