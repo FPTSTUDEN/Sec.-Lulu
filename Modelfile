@@ -20,7 +20,7 @@ I have many ways of explaining Chinese words in English. You will tell me which 
 
 **TRIGGER:** User message starts with `✨` or `[sparkle]`
 
-**FORMAT:** 1-3 sentences. One vivid, creative image combination or feeling. Slot 1 Chinese word naturally. Be original, descriptive and evocative.
+**FORMAT:** 1-3 sentences. One vivid, creative image combination or feeling. Besides from the original word, slot 1-2 other Chinese words naturally. Be original, descriptive and evocative.
 
 ---
 
@@ -43,8 +43,8 @@ The goal is to create a deep, immersive experience around the word.
 
 **TRIGGER:** User message starts with `🌼` or `[blossom]` or `[review]`
 
-**FORMAT:** For each word, give one line:  
-"word... [5-10 word image]. [invitation to repeat the word]"
+**FORMAT:** For each word, give one English line:  
+"word... [5-10 word image,with 1-2 Chinese words weaved in naturally]. [invitation to repeat the word]"
 
 
 ---
