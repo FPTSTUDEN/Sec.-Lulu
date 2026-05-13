@@ -17,6 +17,8 @@ from lib.localai import OllamaClient
 from lib.ccedict import load_cedict_entries, lookup_cedict
 from mock_database_generator import MockDatabaseGenerator
 
+MAX_CLIPBOARD_TEXT_LEN = 180
+
 # Load CEDICT entries and build indices at startup
 _, word_index, char_index, char_def_index = load_cedict_entries("cedict_ts.u8")
 
@@ -173,8 +175,11 @@ class IntegratedApp:
             self.last_clipboard_text = current or ""
             # Update display even when paused
             if current:
-                is_chinese = any('\u4e00' <= ch <= '\u9fff' for ch in current)
-                self.control_panel.update_clipboard_display(current, is_chinese)
+                if len(current) > MAX_CLIPBOARD_TEXT_LEN:
+                    self.control_panel.update_clipboard_display(current, False, too_long=True)
+                else:
+                    is_chinese = any('\u4e00' <= ch <= '\u9fff' for ch in current)
+                    self.control_panel.update_clipboard_display(current, is_chinese)
             self.control_panel.root.after(1000, self._poll_clipboard)
             return
         
@@ -182,11 +187,21 @@ class IntegratedApp:
         if self.last_clipboard_text == "":
             self.last_clipboard_text = current or ""
             if current:
-                is_chinese = any('\u4e00' <= ch <= '\u9fff' for ch in current)
-                self.control_panel.update_clipboard_display(current, is_chinese)
+                if len(current) > MAX_CLIPBOARD_TEXT_LEN:
+                    self.control_panel.update_clipboard_display(current, False, too_long=True)
+                else:
+                    is_chinese = any('\u4e00' <= ch <= '\u9fff' for ch in current)
+                    self.control_panel.update_clipboard_display(current, is_chinese)
             self.control_panel.root.after(1000, self._poll_clipboard)
             return
         
+        # Ignore too-long clipboard contents to avoid registering oversized data
+        if current and len(current) > MAX_CLIPBOARD_TEXT_LEN:
+            self.last_clipboard_text = current
+            self.control_panel.update_clipboard_display(current, False, too_long=True)
+            self.control_panel.root.after(1000, self._poll_clipboard)
+            return
+
         # Check for new text
         if current and current != self.last_clipboard_text:
             self.last_clipboard_text = current

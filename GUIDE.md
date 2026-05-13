@@ -20,11 +20,11 @@ Download from [ollama.ai](https://ollama.ai), then run:
 
 ```bash
 ollama pull qwen2.5:7b # You can change OllamaClient(model="your_preferred_model") in lib/localai.py and pull another model if you want
-python build_modelfile.py --mode SparkleNotes --output Modelfile
+# Advanced: python build_modelfile.py --mode SparkleNotes --output Modelfile
 ollama create xiaoxi -f Modelfile
 ```
 
-To combine all mode fragments into one model file:
+**Advanced:** To combine all mode fragments into one model file:
 
 ```bash
 python build_modelfile.py --all --output Modelfile

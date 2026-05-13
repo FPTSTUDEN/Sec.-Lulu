@@ -6,6 +6,7 @@ class OllamaClient:
         self.host = host
         self.model = model
         self.url = f"{self.host}/api/generate"
+        self.think = False
     def manage_model(self, action="load"):
         """
         Loads or unloads the model from VRAM.
@@ -31,6 +32,7 @@ class OllamaClient:
         payload = {
             "model": self.model,
             "prompt": prompt,
+            "think": self.think,
             "stream": True  # Force streaming
         }
         
