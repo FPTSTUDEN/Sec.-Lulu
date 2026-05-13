@@ -46,6 +46,9 @@ class ControlPanel:
         self.mode_index = 1
         self.response_mode = MODES[self.mode_index]
         self.current_clipboard_text = ""  # Store the actual clipboard text
+        self.long_clipboard_warning = False
+        self.thinking_enabled = getattr(self.ai, "think", False)
+        self.show_thinking = True
         
         self.root = ctk.CTk()
         self.root.title("Monitor")
@@ -120,6 +123,22 @@ class ControlPanel:
         )
         self.ai_btn.pack(side="top", fill="x", pady=5)
 
+        self.think_btn = ctk.CTkButton(
+            self.advanced_frame,
+            text=f"🧠 {'On' if self.thinking_enabled else 'Off'}",
+            fg_color="#4a4a4a",
+            command=self.toggle_thinking
+        )
+        self.think_btn.pack(side="top", fill="x", pady=5)
+
+        self.show_think_btn = ctk.CTkButton(
+            self.advanced_frame,
+            text=f"👁️ {'Show' if self.show_thinking else 'Hide'}",
+            fg_color="#4a4a4a",
+            command=self.toggle_show_thinking
+        )
+        self.show_think_btn.pack(side="top", fill="x", pady=5)
+
         self.mode_menu = ctk.CTkOptionMenu(
             self.advanced_frame,
             values=MODES,
@@ -134,16 +153,26 @@ class ControlPanel:
         self.status_text = status_text
         self.root.after(0, lambda: self._update_top_line(color=color))
     
-    def update_clipboard_display(self, text, is_valid_chinese=False):
+    def update_clipboard_display(self, text, is_valid_chinese=False, too_long=False):
         """Update the clipboard display label. Thread-safe."""
-        self.current_clipboard_text = text
-        self.clipboard_is_chinese = is_valid_chinese
+        if too_long:
+            self.current_clipboard_text = ""
+            self.clipboard_is_chinese = False
+            self.long_clipboard_warning = True
+        else:
+            self.current_clipboard_text = text
+            self.clipboard_is_chinese = is_valid_chinese
+            self.long_clipboard_warning = False
         self.root.after(0, lambda: self._update_top_line())
 
     def _update_top_line(self, color=None):
         status_text = self.status_text or "Unknown"
-        clip_text = self.current_clipboard_text or "(No clipboard text)"
-        icon = "🔤" if getattr(self, 'clipboard_is_chinese', False) else "📋"
+        if getattr(self, 'long_clipboard_warning', False):
+            clip_text = "(long text ignored)"
+            icon = "⚠️"
+        else:
+            clip_text = self.current_clipboard_text or "(No clipboard text)"
+            icon = "🔤" if getattr(self, 'clipboard_is_chinese', False) else "📋"
         base_text = f"AI {status_text}, {icon} "
 
         label_width = self.top_line_label.winfo_width() or self.top_line_frame.winfo_width()
@@ -199,6 +228,23 @@ class ControlPanel:
             self.load_ai()
             self.ai_opened = True
             self.ai_btn.configure(text="🤖 Unload", fg_color="#4a4a4a")
+
+    def toggle_thinking(self):
+        """Toggle the Ollama thinking option."""
+        self.thinking_enabled = not self.thinking_enabled
+        if hasattr(self.ai, 'think'):
+            self.ai.think = self.thinking_enabled
+        label = "🧠 On" if self.thinking_enabled else "🧠 Off"
+        color = "green" if self.thinking_enabled else "#4a4a4a"
+        self.think_btn.configure(text=label, fg_color=color)
+
+    def toggle_show_thinking(self):
+        """Toggle whether to show thinking in responses."""
+        self.show_thinking = not self.show_thinking
+        label = "👁️ Show" if self.show_thinking else "👁️ Hide"
+        color = "green" if self.show_thinking else "#4a4a4a"
+        self.show_think_btn.configure(text=label, fg_color=color)
+
     def toggle_state(self):
         """Switches between Start and Pause states"""
         self.opened = not self.opened
@@ -617,7 +663,7 @@ class HomeFrame(ctk.CTkFrame):
                     prompt = f"Word Blossom Mode: {word_list}"
 
                     full_response = ""
-                    for chunk in self.ai.generate_response(prompt):
+                    for chunk in self.ai.generate_response(prompt, self.show_thinking):
                         full_response += chunk
                         self.after(0, lambda text=chunk: self.append_text(text, self.insight_text))
 
@@ -651,7 +697,7 @@ class HomeFrame(ctk.CTkFrame):
                 self.after(0, lambda: self._set_text(self.summary_text, "Generating summary..."))
 
                 full_summary = ""
-                for chunk in self.ai.generate_response(prompt):
+                for chunk in self.ai.generate_response(prompt, self.show_thinking):
                     full_summary += chunk
                     self.after(0, lambda text=chunk: self.append_text(text, self.summary_text))
 

@@ -41,16 +41,20 @@ The setup is local, no cloud, no data collection. Just you and your language lea
 - [x] Improved challenge+summary  ~~(change to: mixed language maybe?)~~
 - [x] Integrated lookup mode(word hover: show translation + quick def) 
 - [x] ~~EasyOCR integration because Powertoys OCR messed it up sometimes~~ Powertoys OCR is enough for normal uses
-- [ ] No pre-load model & auto start
-- [ ] Compact design (UI)
+- [ ] ~~No pre-load model~~
+- [x] loading ccedict too long
+- [ ] auto picker for modes
+- [ ] MEMORY solution for AI with ADHD & dementia
+- [ ] Chat for Session memory reinforcement
 - [ ] **Click - save/replace with Eng word**
 - [ ] Word revision mechanism
-- [ ] Revise Modelfile: Hard sentence dealing?
+- [ ] Hard sentence dealing?
 - [ ] CI/CD pipeline
 - [ ] multiple personality
 - [x] Clipboard state & Option to lookup immediately (UI)
 - [ ] Chinese mode + TTS
 - [ ] ~~Normal sentence + words mode~~
+- [ ] Full Sentence mode(word pick UI: show translation + quick def +  switch to mixed language) (integrated revision, better explanation on long-complex sentences)
 
 - [ ] More test cases for each mode for debugging
 - [ ] Recall & discuss on previous words (mempalace?)
