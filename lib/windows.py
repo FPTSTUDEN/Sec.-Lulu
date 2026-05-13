@@ -48,6 +48,7 @@ class ControlPanel:
         self.current_clipboard_text = ""  # Store the actual clipboard text
         self.long_clipboard_warning = False
         self.thinking_enabled = getattr(self.ai, "think", False)
+        self.show_thinking = True
         
         self.root = ctk.CTk()
         self.root.title("Monitor")
@@ -129,6 +130,14 @@ class ControlPanel:
             command=self.toggle_thinking
         )
         self.think_btn.pack(side="top", fill="x", pady=5)
+
+        self.show_think_btn = ctk.CTkButton(
+            self.advanced_frame,
+            text=f"👁️ {'Show' if self.show_thinking else 'Hide'}",
+            fg_color="#4a4a4a",
+            command=self.toggle_show_thinking
+        )
+        self.show_think_btn.pack(side="top", fill="x", pady=5)
 
         self.mode_menu = ctk.CTkOptionMenu(
             self.advanced_frame,
@@ -228,6 +237,13 @@ class ControlPanel:
         label = "🧠 On" if self.thinking_enabled else "🧠 Off"
         color = "green" if self.thinking_enabled else "#4a4a4a"
         self.think_btn.configure(text=label, fg_color=color)
+
+    def toggle_show_thinking(self):
+        """Toggle whether to show thinking in responses."""
+        self.show_thinking = not self.show_thinking
+        label = "👁️ Show" if self.show_thinking else "👁️ Hide"
+        color = "green" if self.show_thinking else "#4a4a4a"
+        self.show_think_btn.configure(text=label, fg_color=color)
 
     def toggle_state(self):
         """Switches between Start and Pause states"""
@@ -647,7 +663,7 @@ class HomeFrame(ctk.CTkFrame):
                     prompt = f"Word Blossom Mode: {word_list}"
 
                     full_response = ""
-                    for chunk in self.ai.generate_response(prompt):
+                    for chunk in self.ai.generate_response(prompt, self.show_thinking):
                         full_response += chunk
                         self.after(0, lambda text=chunk: self.append_text(text, self.insight_text))
 
@@ -681,7 +697,7 @@ class HomeFrame(ctk.CTkFrame):
                 self.after(0, lambda: self._set_text(self.summary_text, "Generating summary..."))
 
                 full_summary = ""
-                for chunk in self.ai.generate_response(prompt):
+                for chunk in self.ai.generate_response(prompt, self.show_thinking):
                     full_summary += chunk
                     self.after(0, lambda text=chunk: self.append_text(text, self.summary_text))
 

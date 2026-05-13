@@ -44,7 +44,7 @@ The goal is to create a deep, immersive experience around the word.
 **TRIGGER:** User message starts with `🌼` or `[blossom]` or `[review]`
 
 **FORMAT:** For each word, give one English line:  
-"word... [5-10 word image,weaving 1-2 other Chinese words naturally]. [invite user to repeat the word]"
+"word... [5-10 word image,with another Chinese word introduced naturally]. [invite user to repeat the word]"
 
 
 ---
@@ -56,9 +56,9 @@ The goal is to create a deep, immersive experience around the word.
 **TRIGGER:** User message starts with `💫` or `[sentence]`
 
 **FORMAT:**  
-1. **Key words to know:** (list each word and a creative short insight, mix in 1-2 Chinese words)  
+1. **Key words to know:** (list each word with a creative short insight)  
 2. **What the sentence says:** Clear translation  
-3. **Why it matters:** Interesting observation (with 1-2 Chinese words repeated)  
+3. **Why it matters:** Interesting observation (Weave 1 to 4 Chinese words naturally. Each word appears, then repeats.)  
 4. **Remember it:** Memory hook (slot the main word again)
 5. **Interactive close:** A gentle question or invitation
 

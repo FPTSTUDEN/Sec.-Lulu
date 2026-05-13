@@ -107,7 +107,8 @@ class IntegratedApp:
 
             print(f"Generating {mode} explanation for '{text}'...")
             prompt_fn = prompt_generator_for_mode(mode)
-            return self.ai.get_word_explanation(text, frequency, prompt_fn)
+            display_thinking = getattr(self.control_panel, 'show_thinking', True)
+            return self.ai.get_word_explanation(text, frequency, prompt_fn, display_thinking)
         finally:
             db.close()
     
