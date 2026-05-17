@@ -65,7 +65,7 @@ class IntegratedApp:
             # SQLite connections cannot be shared across threads
             reviewer = WordReviewer(self.db_path, db_cls=self.db_cls)
             db = self.db_cls(self.db_path)
-            self.app_window = App(reviewer, ai_client=self.ai, db=db)
+            self.app_window = App(reviewer, ai_client=self.ai, db=db, control_panel=self.control_panel)
             self.app_window.mainloop()
         except Exception as e:
             print(f"Error launching app: {e}")
@@ -106,9 +106,17 @@ class IntegratedApp:
                 return f"No direct match found for '{text}'."
 
             print(f"Generating {mode} explanation for '{text}'...")
-            prompt_fn = prompt_generator_for_mode(mode)
+            base_prompt_fn = prompt_generator_for_mode(mode)
+            # Include session context from the control panel if present
+            session_ctx = getattr(self.control_panel, 'session_context', '') if self.control_panel else ''
+            def prompt_fn_with_session(t, f):
+                p = base_prompt_fn(t, f)
+                if session_ctx:
+                    return f"Session context: {session_ctx}\n\n{p}"
+                return p
+
             display_thinking = getattr(self.control_panel, 'show_thinking', True)
-            return self.ai.get_word_explanation(text, frequency, prompt_fn, display_thinking)
+            return self.ai.get_word_explanation(text, frequency, prompt_fn_with_session, display_thinking)
         finally:
             db.close()
     
@@ -120,7 +128,7 @@ class IntegratedApp:
         # print(self.control_panel.response_mode)
         response_popup = Long_message_popup(
             "Explanation",
-            "",
+            text,
             master=self.control_panel,
             display_image=(self.control_panel.response_mode.lower() != "lookup only"),
             word_index=self.word_index,
@@ -131,10 +139,16 @@ class IntegratedApp:
             full_explanation = ""
             try:
                 for chunk in explanation_generator:
-                    full_explanation += chunk
-                    # Update the UI on the main thread
-                    self.control_panel.root.after(0, lambda c=chunk: response_popup.append_text(c))
-                
+                    # Route thinking-marked chunks to the think box
+                    if isinstance(chunk, str) and chunk.startswith("__THINK__"):
+                        thinking = chunk[len("__THINK__"):]
+                        full_explanation += thinking
+                        self.control_panel.root.after(0, lambda t=thinking: response_popup.append_think(t))
+                    else:
+                        full_explanation += chunk
+                        # Update the UI on the main thread
+                        self.control_panel.root.after(0, lambda c=chunk: response_popup.append_text(c))
+
                 # Once finished, enable the save button logic
                 self.control_panel.root.after(0, lambda: self._setup_save_button(response_popup, text, full_explanation))
             except Exception as e:

@@ -66,8 +66,8 @@ class OllamaClient:
 
                 if display_thinking:
                     if thinking_token:
-                        # print("[localai] yield thinking:", repr(thinking_token))
-                        yield thinking_token
+                        # Prefix thinking output so callers can route it separately
+                        yield "__THINK__" + thinking_token
                     if token:
                         # print("[localai] yield response:", repr(token))
                         yield token

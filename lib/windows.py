@@ -29,6 +29,145 @@ except ImportError:
     is_chinese_char = None
 # customtkinter.FontManager.load_font(os.path.join(current_folder, "Mengshen-HanSerif.ttf"))
 
+# ======================
+# Reusable Components
+# ======================
+
+class LookupPanel(customtkinter.CTkFrame):
+    """Reusable sidebar panel for CEDICT lookup with hover binding support."""
+    def __init__(self, master, word_index=None, char_def_index=None, **kwargs):
+        super().__init__(master, fg_color=("gray85", "gray25"), corner_radius=8, **kwargs)
+        self.word_index = word_index or {}
+        self.char_def_index = char_def_index or {}
+        self.last_looked_up_word = None
+        self.tracked_text_widgets = []
+
+        lookup_title = customtkinter.CTkLabel(self, text="📖 Lookup", font=("Mengshen-Handwritten", 14, "bold"), text_color="orange")
+        lookup_title.pack(pady=5)
+
+        self.lookup_text = customtkinter.CTkTextbox(self, wrap="word", font=("Mengshen-Handwritten", 12), height=120)
+        self.lookup_text.configure(state="disabled")
+        self.lookup_text.pack(fill="both", expand=True, padx=5, pady=5)
+
+    def bind_text_box(self, ctk_textbox):
+        """Bind a CTkTextbox for hover lookup."""
+        try:
+            underlying = getattr(ctk_textbox, '_textbox', None)
+            if underlying:
+                self.tracked_text_widgets.append(underlying)
+                underlying.bind("<Motion>", lambda e: self._on_text_motion(e))
+                underlying.bind("<Leave>", lambda e: self._on_text_leave())
+        except Exception as e:
+            pass
+
+    def _on_text_motion(self, event):
+        """Handle mouse motion over text box - perform lookup on Chinese words."""
+        try:
+            text_widget = event.widget
+            index = text_widget.index(f"@{event.x},{event.y}")
+            if not index:
+                return
+
+            line, col = map(int, index.split("."))
+            text_content = text_widget.get("1.0", "end-1c")
+            lines = text_content.split("\n")
+            abs_pos = sum(len(lines[i]) + 1 for i in range(line - 1)) + col
+
+            if abs_pos >= len(text_content):
+                return
+
+            if abs_pos > 0 and not is_chinese_char(text_content[abs_pos]):
+                if is_chinese_char(text_content[abs_pos - 1]):
+                    abs_pos = abs_pos - 1
+
+            word, start_pos, end_pos = extract_chinese_word_at_position(text_content, abs_pos, self.word_index)
+
+            if word and word != self.last_looked_up_word:
+                self.last_looked_up_word = word
+                self._update_lookup_panel(word)
+        except Exception:
+            pass
+
+    def _on_text_leave(self):
+        """Clear lookup panel when mouse leaves text box."""
+        self.last_looked_up_word = None
+        self._clear_lookup_panel()
+
+    def _update_lookup_panel(self, word):
+        """Update the lookup panel with CEDICT information for the given word."""
+        self.lookup_text.configure(state="normal")
+        self.lookup_text.delete("1.0", "end")
+
+        word_entry, char_matches = lookup_cedict(word, self.word_index, self.char_def_index)
+
+        if word_entry:
+            self.lookup_text.insert("end", f"📖 {word_entry['simplified']}\n({word_entry['traditional']})\n\n")
+            for definition in word_entry['definitions']:
+                self.lookup_text.insert("end", f"• {definition}\n")
+        elif char_matches:
+            self.lookup_text.insert("end", f"Character breakdown:\n\n")
+            for char, entry in char_matches:
+                self.lookup_text.insert("end", f"• {char}: {entry['simplified']}\n")
+        else:
+            self.lookup_text.insert("end", "No match found")
+
+        self.lookup_text.configure(state="disabled")
+
+    def _clear_lookup_panel(self):
+        """Clear the lookup panel."""
+        self.lookup_text.configure(state="normal")
+        self.lookup_text.delete("1.0", "end")
+        self.lookup_text.configure(state="disabled")
+
+
+class ThinkBox(customtkinter.CTkFrame):
+    """Reusable collapsible thinking box component."""
+    def __init__(self, master, **kwargs):
+        super().__init__(master, fg_color="transparent", **kwargs)
+        self.think_visible = True
+
+        think_header = customtkinter.CTkFrame(self, fg_color="transparent")
+        think_header.pack(side="top", fill="x", pady=(0, 3))
+
+        think_label = customtkinter.CTkLabel(think_header, text="🧠 Thinking", font=("Mengshen-Handwritten", 12, "bold"))
+        think_label.pack(side="left")
+
+        self.think_toggle_btn = customtkinter.CTkButton(think_header, text="▲", width=25, height=20, command=self._toggle_think_box)
+        self.think_toggle_btn.pack(side="right", padx=(5, 0))
+
+        self.think_box = customtkinter.CTkTextbox(self, wrap="word", font=("Mengshen-Handwritten", 12), height=3)
+        self.think_box.insert("1.0", "")
+        self.think_box.configure(state="disabled")
+        self.think_box.pack(fill="both", expand=True)
+
+    def append_think(self, new_text):
+        """Thread-safe way to add thinking text to the think box."""
+        try:
+            self.think_box.configure(state="normal")
+            self.think_box.insert("end", new_text)
+            self.think_box.configure(state="disabled")
+            self.think_box.see("end")
+        except Exception:
+            pass
+
+    def _toggle_think_box(self):
+        """Toggle visibility of the thinking box."""
+        self.think_visible = not self.think_visible
+        if self.think_visible:
+            self.think_box.pack(fill="both", expand=True)
+            self.think_toggle_btn.configure(text="▲")
+        else:
+            self.think_box.pack_forget()
+            self.think_toggle_btn.configure(text="▼")
+
+    def clear_think(self):
+        """Clear the think box content."""
+        self.think_box.configure(state="normal")
+        self.think_box.delete("1.0", "end")
+        self.think_box.configure(state="disabled")
+
+
+
 class ControlPanel:
     def __init__(self, app_callback=None, ai_client:OllamaClient=OllamaClient()): 
         # ctk.set_default_color_theme("green")
@@ -70,6 +209,19 @@ class ControlPanel:
         )
         self.top_line_label.pack(side="left", fill="x", expand=True)
         self.top_line_label.bind("<Button-1>", self._on_clipboard_click)
+
+        # Session context input (compact mode)
+        self.session_context = ""
+        try:
+            self.session_entry = ctk.CTkEntry(self.top_line_frame, width=220)
+            self.session_entry.insert(0, "")
+            self.session_entry.pack(side="right", padx=(5,0))
+
+            self.session_send = ctk.CTkButton(self.top_line_frame, text="💬", width=40, command=lambda: self._set_session_context())
+            self.session_send.pack(side="right", padx=(5,0))
+        except Exception:
+            self.session_entry = None
+            self.session_send = None
 
         self.top_line_font = tkfont.Font(font=self.top_line_label.cget("font"))
 
@@ -164,6 +316,14 @@ class ControlPanel:
             self.clipboard_is_chinese = is_valid_chinese
             self.long_clipboard_warning = False
         self.root.after(0, lambda: self._update_top_line())
+
+    def _set_session_context(self):
+        try:
+            if self.session_entry:
+                self.session_context = self.session_entry.get()
+                self.update_ai_status(f"Session set", "gray")
+        except Exception:
+            pass
 
     def _update_top_line(self, color=None):
         status_text = self.status_text or "Unknown"
@@ -265,10 +425,26 @@ class ControlPanel:
             self.advanced_frame.pack_forget()
             self.toggle_advanced_btn.configure(text="▼")
             self.advanced_visible = False
+            # Show compact session entry when advanced is collapsed
+            try:
+                if self.session_entry:
+                    self.session_entry.pack(side="right", padx=(5,0))
+                if self.session_send:
+                    self.session_send.pack(side="right", padx=(5,0))
+            except Exception:
+                pass
         else:
             self.advanced_frame.pack(after=self.buttons_frame, side="top", fill="x", padx=10, pady=5)
             self.toggle_advanced_btn.configure(text="▲")
             self.advanced_visible = True
+            # Hide compact session entry when advanced is expanded
+            try:
+                if self.session_entry:
+                    self.session_entry.pack_forget()
+                if self.session_send:
+                    self.session_send.pack_forget()
+            except Exception:
+                pass
     def open_app(self):
         """Triggers the main App launch without blocking the control panel"""
         if self.app_callback:
@@ -294,13 +470,8 @@ class Long_message_popup:
     def __init__(self, title, message, master: ControlPanel, display_image=True, word_index=None, char_def_index=None):
         # Use Toplevel and link it to the master (ControlPanel)
         self.long_popup = customtkinter.CTkToplevel(master.root)
-        self.long_popup.geometry("800x350")
+        self.long_popup.geometry("900x400")
         self.long_popup.title(title)
-        
-        # Store CEDICT indices for hover lookup
-        self.word_index = word_index or {}
-        self.char_def_index = char_def_index or {}
-        self.last_looked_up_word = None
         
         # Ensure it stays on top
         self.long_popup.attributes("-topmost", True)
@@ -333,134 +504,53 @@ class Long_message_popup:
         text_panel_frame = customtkinter.CTkFrame(content_frame, fg_color="transparent")
         text_panel_frame.pack(side="left", fill="both", expand=True, padx=5)
         
+        # Input and Thinking boxes above the main text area
+        input_frame = customtkinter.CTkFrame(text_panel_frame, fg_color="transparent")
+        input_frame.pack(side="top", fill="x", padx=5, pady=(0,5))
+
+        self.input_box = customtkinter.CTkTextbox(input_frame, wrap="word", font=("Mengshen-Handwritten", 16), height=3)
+        self.input_box.insert("1.0", message)
+        self.input_box.configure(state="normal")
+        self.input_box.pack(side="left", fill="both", expand=True, padx=(0,5))
+
+        # Use reusable ThinkBox component
+        self.think_component = ThinkBox(input_frame)
+        self.think_component.pack(side="left", fill="both", expand=True, padx=(5,0))
+
         self.text_box = customtkinter.CTkTextbox(text_panel_frame, wrap="word", font=("Mengshen-Handwritten", 20))
         self.text_box.insert("1.0", message)
         self.text_box.configure(state="disabled")
         self.text_box.pack(side="left", fill="both", expand=True, padx=5, pady=5)
         
-        # Side panel for Chinese word lookup results
-        self.lookup_panel = customtkinter.CTkFrame(text_panel_frame, fg_color=("gray85", "gray25"), corner_radius=8)
+        # Use reusable LookupPanel component
+        self.lookup_panel = LookupPanel(text_panel_frame, word_index=word_index, char_def_index=char_def_index)
         self.lookup_panel.pack(side="right", fill="y", padx=5, pady=5, ipadx=10, ipady=10)
         self.lookup_panel.pack_propagate(False)
         self.lookup_panel.configure(width=180)
         
-        lookup_title = customtkinter.CTkLabel(self.lookup_panel, text="📖 Lookup", font=("Mengshen-Handwritten", 14, "bold"), text_color="orange")
-        lookup_title.pack(pady=5)
-        
-        self.lookup_text = customtkinter.CTkTextbox(self.lookup_panel, wrap="word", font=("Mengshen-Handwritten", 12), height=120)
-        self.lookup_text.configure(state="disabled")
-        self.lookup_text.pack(fill="both", expand=True, padx=5, pady=5)
-        
-        # Bind mouse motion to text box for hover lookup
+        # Bind hover events to all text boxes
         if lookup_cedict and extract_chinese_word_at_position:
-            self._bind_hover_events()
+            self.lookup_panel.bind_text_box(self.input_box)
+            self.lookup_panel.bind_text_box(self.text_box)
+            self.lookup_panel.bind_text_box(self.think_component.think_box)
     
     def _bind_hover_events(self):
-        """Bind mouse motion events to the text box for hover-based lookup."""
+        """(Deprecated - now handled by LookupPanel.bind_text_box())"""
+        pass
+
+    def append_think(self, new_text):
+        """Thread-safe way to add thinking text to the think box (delegates to ThinkBox component)."""
         try:
-            # Get the underlying Tkinter Text widget from CTkTextbox
-            underlying_text = self.text_box._textbox
-            underlying_text.bind("<Motion>", self._on_text_motion)
-            underlying_text.bind("<Leave>", self._on_text_leave)
-        except Exception as e:
-            print(f"Error binding hover events: {e}")
-    
-    def _on_text_motion(self, event):
-        """Handle mouse motion over text box - perform lookup on Chinese words."""
-        try:
-            # Get the underlying text widget
-            text_widget = event.widget
-            
-            # Get the character index at mouse position
-            index = text_widget.index(f"@{event.x},{event.y}")
-            if not index:
-                return
-            
-            # Extract line and column from index
-            line, col = map(int, index.split("."))
-            
-            # Get the full text to search
-            text_content = text_widget.get("1.0", "end-1c")
-            
-            # Convert line.col index to absolute position in text
-            lines = text_content.split("\n")
-            abs_pos = sum(len(lines[i]) + 1 for i in range(line - 1)) + col
-            
-            # Ensure we're within bounds
-            if abs_pos >= len(text_content):
-                return
-            
-            # Normalize position: Tkinter @x,y can land on the boundary AFTER a character.
-            # If the character at abs_pos is not Chinese but the one before it is,
-            # use abs_pos - 1 to start from the actual hovered character.
-            if abs_pos > 0 and not is_chinese_char(text_content[abs_pos]):
-                if is_chinese_char(text_content[abs_pos - 1]):
-                    abs_pos = abs_pos - 1
-            
-            # Extract the Chinese word at this position
-            word, start_pos, end_pos = extract_chinese_word_at_position(text_content, abs_pos, self.word_index)
-            
-            if word and word != self.last_looked_up_word:
-                self.last_looked_up_word = word
-                self._update_lookup_panel(word)
-        except Exception as e:
-            pass  # Silently ignore hover errors
-    
-    def _on_text_leave(self, event):
-        """Clear lookup panel when mouse leaves text box."""
-        self.last_looked_up_word = None
-        self._clear_lookup_panel()
-    
-    def _update_lookup_panel(self, word):
-        """Update the lookup panel with CEDICT information for the given word."""
-        self.lookup_text.configure(state="normal")
-        self.lookup_text.delete("1.0", "end")
-        
-        # Perform CEDICT lookup
-        word_entry, char_matches = lookup_cedict(word, self.word_index, self.char_def_index)
-        
-        if word_entry:
-            # Direct word match found
-            simplified = word_entry.get("simplified", "")
-            traditional = word_entry.get("traditional", "")
-            pinyin = word_entry.get("pinyin", "")
-            definitions = word_entry.get("definitions", [])
-            
-            # Format output
-            output = f"词: {simplified}\n"
-            if traditional != simplified:
-                output += f"繁: {traditional}\n"
-            output += f"拼: {pinyin}\n"
-            if definitions:
-                output += f"义: {'; '.join(definitions[:2])}"  # Show first 2 definitions
-            
-            self.lookup_text.insert("1.0", output)
-        elif char_matches:
-            # Character-level matches
-            output = f"词组: {word}\n\n"
-            for char, entry in char_matches[:3]:  # Show first 3 characters
-                char_pinyin = entry.get("pinyin", "")
-                char_defs = entry.get("definitions", [])
-                output += f"{char}: {char_pinyin}\n"
-                if char_defs:
-                    output += f"  {char_defs[0][:30]}\n"
-            self.lookup_text.insert("1.0", output)
-        else:
-            self.lookup_text.insert("1.0", f"未找到:\n{word}")
-        
-        self.lookup_text.configure(state="disabled")
-    
-    def _clear_lookup_panel(self):
-        """Clear the lookup panel."""
-        self.lookup_text.configure(state="normal")
-        self.lookup_text.delete("1.0", "end")
-        self.lookup_text.configure(state="disabled")
+            self.think_component.append_think(new_text)
+        except Exception:
+            pass
     
     def append_text(self, new_text):
         """Thread-safe way to add text to the box."""
         self.text_box.configure(state="normal")
         self.text_box.insert("end", new_text)
         self.text_box.configure(state="disabled")
+
         self.text_box.see("end") # Auto-scroll to bottom
     
     def show(self):
@@ -557,11 +647,21 @@ class ReviewFrame(ctk.CTkFrame):
             self._update_display()
 
 class HomeFrame(ctk.CTkFrame):
-    def __init__(self, master, ai_client, db, **kwargs):
+    def __init__(self, master, ai_client, db, control_panel=None, **kwargs):
         super().__init__(master, **kwargs)
         self.ai = ai_client
         self.db = db
+        self.control_panel = control_panel
         self.is_generating = False
+        
+        # CEDICT indices
+        self.word_index = {}
+        self.char_def_index = {}
+        try:
+            from lib.ccedict import load_cedict_entries
+            _, self.word_index, _, self.char_def_index = load_cedict_entries("cedict_ts.u8")
+        except Exception:
+            pass
         
         # Configure grid weights for flexibility
         self.grid_columnconfigure(0, weight=1)
@@ -575,29 +675,55 @@ class HomeFrame(ctk.CTkFrame):
         # --- Daily AI Challenge Section ---
         self.insight_card = ctk.CTkFrame(self, fg_color=("gray90", "gray15"))
         self.insight_card.grid(row=1, column=0, padx=40, pady=10, sticky="nsew")
-        self.insight_card.grid_columnconfigure(0, weight=1)
+        self.insight_card.grid_columnconfigure(0, weight=1)  # Main content fills
+        self.insight_card.grid_columnconfigure(1, weight=0)  # Sidebar is fixed width
         self.insight_card.grid_rowconfigure(1, weight=1)
 
         self.insight_title = ctk.CTkLabel(self.insight_card, text="✨ Daily AI Challenge", font=ctk.CTkFont(weight="bold"))
-        self.insight_title.grid(row=0, column=0, pady=5)
+        self.insight_title.grid(row=0, column=0, columnspan=2, pady=5)
         
         # Textbox set to sticky "nsew" to fill the card
         self.insight_text = ctk.CTkTextbox(self.insight_card, wrap="word", font=("Mengshen-Handwritten", 14), height=100)
         self.insight_text.configure(state="disabled")
         self.insight_text.grid(row=1, column=0, pady=10, padx=10, sticky="nsew")
+        
+        # Reusable ThinkBox for challenge thinking
+        self.think_challenge = ThinkBox(self.insight_card)
+        self.think_challenge.grid(row=2, column=0, pady=5, padx=10, sticky="ew")
+        
+        # Reusable LookupPanel for challenge (side column)
+        self.lookup_challenge = LookupPanel(self.insight_card, word_index=self.word_index, char_def_index=self.char_def_index)
+        self.lookup_challenge.grid(row=1, column=1, rowspan=2, pady=10, padx=5, sticky="nsew")
+        self.lookup_challenge.pack_propagate(False)
+        self.lookup_challenge.configure(width=150)
+        if lookup_cedict and extract_chinese_word_at_position:
+            self.lookup_challenge.bind_text_box(self.insight_text)
 
         # --- Words Summary Section ---
         self.summary_card = ctk.CTkFrame(self, fg_color=("gray85", "gray20"))
         self.summary_card.grid(row=2, column=0, padx=40, pady=10, sticky="nsew")
-        self.summary_card.grid_columnconfigure(0, weight=1)
+        self.summary_card.grid_columnconfigure(0, weight=1)  # Main content fills
+        self.summary_card.grid_columnconfigure(1, weight=0)  # Sidebar is fixed width
         self.summary_card.grid_rowconfigure(1, weight=1)
         
         self.summary_title = ctk.CTkLabel(self.summary_card, text="📚 Words Summary", font=ctk.CTkFont(weight="bold"))
-        self.summary_title.grid(row=0, column=0, pady=5)
+        self.summary_title.grid(row=0, column=0, columnspan=2, pady=5)
         
         self.summary_text = ctk.CTkTextbox(self.summary_card, wrap="word", font=("Mengshen-Handwritten", 12), height=100)
         self.summary_text.configure(state="disabled")
         self.summary_text.grid(row=1, column=0, pady=10, padx=10, sticky="nsew")
+        
+        # Reusable ThinkBox for summary
+        self.think_summary = ThinkBox(self.summary_card)
+        self.think_summary.grid(row=2, column=0, pady=5, padx=10, sticky="ew")
+        
+        # Reusable LookupPanel for summary (side column)
+        self.lookup_summary = LookupPanel(self.summary_card, word_index=self.word_index, char_def_index=self.char_def_index)
+        self.lookup_summary.grid(row=1, column=1, rowspan=2, pady=10, padx=5, sticky="nsew")
+        self.lookup_summary.pack_propagate(False)
+        self.lookup_summary.configure(width=150)
+        if lookup_cedict and extract_chinese_word_at_position:
+            self.lookup_summary.bind_text_box(self.summary_text)
 
         # --- Buttons Frame ---
         self.button_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -652,6 +778,14 @@ class HomeFrame(ctk.CTkFrame):
         self.insight_text.delete("1.0", "end")
         self.insight_text.insert("1.0", "Generating challenge...")
         self.insight_text.configure(state="disabled")
+        
+        # Clear thinking box
+        self.think_challenge.clear_think()
+
+        # Determine thinking display flag from control_panel
+        display_thinking = False
+        if self.control_panel:
+            display_thinking = getattr(self.control_panel, 'show_thinking', False)
 
         def generate():
             try:
@@ -663,9 +797,14 @@ class HomeFrame(ctk.CTkFrame):
                     prompt = f"Word Blossom Mode: {word_list}"
 
                     full_response = ""
-                    for chunk in self.ai.generate_response(prompt, self.show_thinking):
-                        full_response += chunk
-                        self.after(0, lambda text=chunk: self.append_text(text, self.insight_text))
+                    for chunk in self.ai.generate_response(prompt, display_thinking):
+                        # Route __THINK__ prefixed chunks to think box
+                        if chunk.startswith("__THINK__"):
+                            thinking_text = chunk[len("__THINK__"):]
+                            self.after(0, lambda text=thinking_text: self.think_challenge.append_think(text))
+                        else:
+                            full_response += chunk
+                            self.after(0, lambda text=chunk: self.append_text(text, self.insight_text))
 
                     self.after(0, lambda: self.summary_btn.configure(state="normal"))
 
@@ -688,6 +827,14 @@ class HomeFrame(ctk.CTkFrame):
         
         # Clear previous content and show generating message
         self._set_text(self.summary_text, "Generating summary...")
+        
+        # Clear thinking box
+        self.think_summary.clear_think()
+
+        # Determine thinking display flag from control_panel
+        display_thinking = False
+        if self.control_panel:
+            display_thinking = getattr(self.control_panel, 'show_thinking', False)
 
         def generate():
             try:
@@ -697,9 +844,14 @@ class HomeFrame(ctk.CTkFrame):
                 self.after(0, lambda: self._set_text(self.summary_text, "Generating summary..."))
 
                 full_summary = ""
-                for chunk in self.ai.generate_response(prompt, self.show_thinking):
-                    full_summary += chunk
-                    self.after(0, lambda text=chunk: self.append_text(text, self.summary_text))
+                for chunk in self.ai.generate_response(prompt, display_thinking):
+                    # Route __THINK__ prefixed chunks to think box
+                    if chunk.startswith("__THINK__"):
+                        thinking_text = chunk[len("__THINK__"):]
+                        self.after(0, lambda text=thinking_text: self.think_summary.append_think(text))
+                    else:
+                        full_summary += chunk
+                        self.after(0, lambda text=chunk: self.append_text(text, self.summary_text))
 
             except Exception as e:
                 error_msg = f"Error generating summary: {str(e)}"
@@ -709,12 +861,14 @@ class HomeFrame(ctk.CTkFrame):
                 self.after(0, lambda: self.refresh_btn.configure(state="normal"))
 
         threading.Thread(target=generate, daemon=True).start()
+
 class App(ctk.CTk):
-    def __init__(self, reviewer, ai_client=None, db=None):
+    def __init__(self, reviewer, ai_client=None, db=None, control_panel=None):
         super().__init__()
         self.reviewer = reviewer
         self.ai_client = ai_client
         self.db = db
+        self.control_panel = control_panel
         self.title("Vocabulary App")
         self.geometry("800x550")
 
@@ -737,7 +891,7 @@ class App(ctk.CTk):
 
         # Initialize Frames
         self.frames = {}
-        self.frames["home"] = HomeFrame(self, self.ai_client, self.db, fg_color="transparent")
+        self.frames["home"] = HomeFrame(self, self.ai_client, self.db, control_panel=self.control_panel, fg_color="transparent")
         self.frames["review"] = ReviewFrame(self, self.reviewer, fg_color="transparent")
 
         self.show_frame("home")
