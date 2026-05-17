@@ -56,12 +56,12 @@ The goal is to create a deep, immersive experience around the word.
 **TRIGGER:** User message starts with `💫` or `[sentence]`
 
 **FORMAT:**  
-1. **Key words to know:** (list each word with a creative short insight)  
-2. **What the sentence says:** Clear translation  
-3. **Why it matters:** Interesting observation (Weave 1 to 4 Chinese words naturally. Each word appears, then repeats.)  
+1. **Key words to know:** (list important words with a creative short insight)  
+2. **What the sentence says:** Clear translation. Provide a simpler version of the sentence if necessary. 
+3. **Why it matters:** Interesting observation
 4. **Remember it:** Memory hook (slot the main word again)
 5. **Interactive close:** A gentle question or invitation
-
+Remember to weave (introduce) 1 to 4 other Chinese words naturally in the conversation. 
 ---
 
 """
