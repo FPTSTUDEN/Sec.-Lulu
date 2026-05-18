@@ -35,12 +35,18 @@ except ImportError:
 
 class LookupPanel(customtkinter.CTkFrame):
     """Reusable sidebar panel for CEDICT lookup with hover binding support."""
-    def __init__(self, master, word_index=None, char_def_index=None, **kwargs):
+    def __init__(self, master, word_index=None, char_def_index=None, word_click_callback=None, **kwargs):
         super().__init__(master, fg_color=("gray85", "gray25"), corner_radius=8, **kwargs)
         self.word_index = word_index or {}
         self.char_def_index = char_def_index or {}
         self.last_looked_up_word = None
         self.tracked_text_widgets = []
+        self.current_hovered_word = None  # Track the currently hovered word
+        # If caller did not provide a callback, use the default long-response popup
+        if word_click_callback is None:
+            self.word_click_callback = self._default_word_click
+        else:
+            self.word_click_callback = word_click_callback
 
         lookup_title = customtkinter.CTkLabel(self, text="📖 Lookup", font=("Mengshen-Handwritten", 14, "bold"), text_color="orange")
         lookup_title.pack(pady=5)
@@ -50,13 +56,16 @@ class LookupPanel(customtkinter.CTkFrame):
         self.lookup_text.pack(fill="both", expand=True, padx=5, pady=5)
 
     def bind_text_box(self, ctk_textbox):
-        """Bind a CTkTextbox for hover lookup."""
+        """Bind a CTkTextbox for hover lookup and click detection."""
         try:
             underlying = getattr(ctk_textbox, '_textbox', None)
             if underlying:
                 self.tracked_text_widgets.append(underlying)
                 underlying.bind("<Motion>", lambda e: self._on_text_motion(e))
                 underlying.bind("<Leave>", lambda e: self._on_text_leave())
+                # Use press/release to detect short clicks (avoid triggering on drags)
+                underlying.bind("<ButtonPress-1>", lambda e: self._on_button_press(e))
+                underlying.bind("<ButtonRelease-1>", lambda e: self._on_button_release(e))
         except Exception as e:
             pass
 
@@ -84,6 +93,7 @@ class LookupPanel(customtkinter.CTkFrame):
 
             if word and word != self.last_looked_up_word:
                 self.last_looked_up_word = word
+                self.current_hovered_word = word  # Track the hovered word
                 self._update_lookup_panel(word)
         except Exception:
             pass
@@ -93,24 +103,57 @@ class LookupPanel(customtkinter.CTkFrame):
         self.last_looked_up_word = None
         self._clear_lookup_panel()
 
+    def _on_text_click(self, event):
+        """Handle click on text box - show mode selection popup for clicked word."""
+        try:
+            if not self.current_hovered_word:
+                return
+            # Show word selection popup
+            self._show_word_mode_popup(self.current_hovered_word)
+        except Exception as e:
+            print(f"Error handling text click: {e}")
+
+    def _on_button_press(self, event):
+        """Record press position/time for short-click detection."""
+        try:
+            widget = event.widget
+            # store press info on the widget to avoid external state
+            widget._last_press = (event.x, event.y, getattr(event, 'time', None))
+        except Exception:
+            pass
+
+    def _on_button_release(self, event):
+        """On release, check whether this was a short click (not a drag).
+        If so, treat it as a click.
+        """
+        try:
+            widget = event.widget
+            press = getattr(widget, '_last_press', None)
+            if not press:
+                return
+            px, py, ptime = press
+            rx, ry = event.x, event.y
+            rtime = getattr(event, 'time', None)
+            dx = abs(rx - px)
+            dy = abs(ry - py)
+            dt = None
+            if ptime is not None and rtime is not None:
+                dt = rtime - ptime
+            # thresholds: movement <= 5 pixels and time <= 500ms (if available)
+            if dx <= 5 and dy <= 5 and (dt is None or dt <= 500):
+                # treat as click
+                self._on_text_click(event)
+            # clear stored press
+            widget._last_press = None
+        except Exception:
+            pass
+
     def _update_lookup_panel(self, word):
         """Update the lookup panel with CEDICT information for the given word."""
         self.lookup_text.configure(state="normal")
         self.lookup_text.delete("1.0", "end")
-
-        word_entry, char_matches = lookup_cedict(word, self.word_index, self.char_def_index)
-
-        if word_entry:
-            self.lookup_text.insert("end", f"📖 {word_entry['simplified']}\n({word_entry['traditional']})\n\n")
-            for definition in word_entry['definitions']:
-                self.lookup_text.insert("end", f"• {definition}\n")
-        elif char_matches:
-            self.lookup_text.insert("end", f"Character breakdown:\n\n")
-            for char, entry in char_matches:
-                self.lookup_text.insert("end", f"• {char}: {entry['simplified']}\n")
-        else:
-            self.lookup_text.insert("end", "No match found")
-
+        formatted = self._format_lookup_text(word)
+        self.lookup_text.insert("end", formatted)
         self.lookup_text.configure(state="disabled")
 
     def _clear_lookup_panel(self):
@@ -118,6 +161,102 @@ class LookupPanel(customtkinter.CTkFrame):
         self.lookup_text.configure(state="normal")
         self.lookup_text.delete("1.0", "end")
         self.lookup_text.configure(state="disabled")
+
+    def _format_lookup_text(self, word):
+        """Return a formatted lookup string for a word using CEDICT indices.
+
+        Centralizes cedict parsing so callers can reuse the same formatting.
+        """
+        parts = []
+        if not lookup_cedict:
+            return "CEDICT not available"
+
+        try:
+            word_entry, char_matches = lookup_cedict(word, self.word_index, self.char_def_index)
+            if word_entry:
+                parts.append(f"📖 {word_entry.get('simplified','')}\n({word_entry.get('traditional','')})\n")
+                for d in word_entry.get('definitions', []):
+                    parts.append(f"• {d}")
+            elif char_matches:
+                parts.append("Character breakdown:")
+                for char, entry in char_matches:
+                    parts.append(f"• {char}: {entry.get('simplified','')}")
+            else:
+                parts.append("No match found")
+        except Exception:
+            return "No match found"
+
+        return "\n".join(parts)
+
+    def _show_word_mode_popup(self, word):
+        """Show a popup with mode selection for the clicked word."""
+        popup = customtkinter.CTkToplevel(self)
+        popup.geometry("400x200")
+        popup.title(f"Select Mode for '{word}'")
+        popup.attributes("-topmost", True)
+        
+        # Title with the word
+        title_label = customtkinter.CTkLabel(
+            popup, 
+            text=f"Word: {word}", 
+            font=("Mengshen-Handwritten", 16, "bold")
+        )
+        title_label.pack(pady=(10, 5))
+        
+        # Mode selection label
+        mode_label = customtkinter.CTkLabel(
+            popup, 
+            text="Choose a mode:", 
+            font=("Mengshen-Handwritten", 12)
+        )
+        mode_label.pack(pady=5)
+        
+        # Mode dropdown
+        mode_var = customtkinter.StringVar(value=MODES[0])
+        mode_dropdown = customtkinter.CTkOptionMenu(
+            popup,
+            values=MODES,
+            variable=mode_var,
+            font=("Mengshen-Handwritten", 11)
+        )
+        mode_dropdown.pack(pady=10, padx=20, fill="x")
+        
+        # Button frame
+        button_frame = customtkinter.CTkFrame(popup, fg_color="transparent")
+        button_frame.pack(pady=10, padx=20, fill="x")
+        
+        def on_select():
+            selected_mode = mode_var.get()
+            if self.word_click_callback:
+                self.word_click_callback(word, selected_mode)
+            popup.destroy()
+        
+        select_btn = customtkinter.CTkButton(
+            button_frame,
+            text="✓ Select",
+            fg_color="green",
+            command=on_select
+        )
+        select_btn.pack(side="left", padx=5, expand=True)
+        
+        cancel_btn = customtkinter.CTkButton(
+            button_frame,
+            text="✕ Cancel",
+            fg_color="#942626",
+            command=popup.destroy
+        )
+        cancel_btn.pack(side="left", padx=5, expand=True)
+
+    def _default_word_click(self, word, selected_mode):
+        """Default callback: open a Long_message_popup showing lookup + selected mode."""
+        try:
+            header = f"Mode: {selected_mode}\nWord: {word}\n\n"
+            body = self._format_lookup_text(word)
+            message = header + body
+            popup = Long_message_popup(f"{word} — {selected_mode}", message, master=self, display_image=True, word_index=self.word_index, char_def_index=self.char_def_index, word_click_callback=None)
+            popup.show()
+        except Exception as e:
+            print(f"Error opening default long popup: {e}")
 
 
 class ThinkBox(customtkinter.CTkFrame):
@@ -467,9 +606,11 @@ def popup_message(title, message):
     tkmb.showinfo(title, message)
     root.destroy()
 class Long_message_popup:
-    def __init__(self, title, message, master: ControlPanel, display_image=True, word_index=None, char_def_index=None):
-        # Use Toplevel and link it to the master (ControlPanel)
-        self.long_popup = customtkinter.CTkToplevel(master.root)
+    def __init__(self, title, message, master, display_image=True, word_index=None, char_def_index=None, word_click_callback=None):
+        # master may be a ControlPanel (with .root) or a widget; determine parent for Toplevel
+        parent = getattr(master, 'root', master)
+        # Use Toplevel and link it to the parent
+        self.long_popup = customtkinter.CTkToplevel(parent)
         self.long_popup.geometry("900x400")
         self.long_popup.title(title)
         
@@ -523,7 +664,7 @@ class Long_message_popup:
         self.text_box.pack(side="left", fill="both", expand=True, padx=5, pady=5)
         
         # Use reusable LookupPanel component
-        self.lookup_panel = LookupPanel(text_panel_frame, word_index=word_index, char_def_index=char_def_index)
+        self.lookup_panel = LookupPanel(text_panel_frame, word_index=word_index, char_def_index=char_def_index, word_click_callback=word_click_callback)
         self.lookup_panel.pack(side="right", fill="y", padx=5, pady=5, ipadx=10, ipady=10)
         self.lookup_panel.pack_propagate(False)
         self.lookup_panel.configure(width=180)

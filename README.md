@@ -43,16 +43,18 @@ The setup is local, no cloud, no data collection. Just you and your language lea
 - [x] ~~EasyOCR integration because Powertoys OCR messed it up sometimes~~ Powertoys OCR is enough for normal uses
 - [ ] ~~No pre-load model~~
 - [x] loading ccedict too long
+- [ ] Handle sentences
+- [x] **Click - popup/replace with Eng word**
+- [ ] Word & sentence graph
 - [ ] auto picker for modes
+- [ ] **Chinese mode + TTS**
 - [ ] MEMORY solution for AI with ADHD & dementia
 - [ ] Chat for Session memory reinforcement
-- [ ] **Click - save/replace with Eng word**
 - [ ] Word revision mechanism
 - [ ] Hard sentence dealing?
 - [ ] CI/CD pipeline
 - [ ] multiple personality
 - [x] Clipboard state & Option to lookup immediately (UI)
-- [ ] Chinese mode + TTS
 - [ ] ~~Normal sentence + words mode~~
 - [ ] Full Sentence mode(word pick UI: show translation + quick def +  switch to mixed language) (integrated revision, better explanation on long-complex sentences)
 
