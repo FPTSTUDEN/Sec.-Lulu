@@ -492,6 +492,10 @@ class Long_message_popup:
             self.lookup_panel.bind_text_box(self.text_box)
             self.lookup_panel.bind_text_box(self.think_component.think_box)
 
+    def add_button(self, text, command):
+        btn = customtkinter.CTkButton(self.long_popup, text=text, command=command)
+        btn.pack(side="bottom", pady=10)
+        return btn
     def append_think(self, new_text):
         self.think_component.append_think(new_text)
     

@@ -1,7 +1,7 @@
 <!-- ![banner](./.misc/crimson%20banner%20-%20ChatGPT.png) -->
 <h1 align="center">
     <!-- <img src="./.misc/cover.png" width="100%"/> -->
-    Secretary Lulu
+    Sec. Lulu
     <!-- <br> -->
 </h1>
 
@@ -9,7 +9,7 @@
 
 > <img align="right" alt="cards" src="./.misc/cards.png" width=35% height=35%>
 > Stop looking up words. Start living them.
-In the flow of reading or browsing, every unfamiliar word is an opportunity lost to the friction of switching tabs. Sec. Lulu - an AI language learning assistant - hopes to bridge that gap by **recording new words as you go** (clipboard or OCR), tailoring them into a **structured learning program** just for you.
+In the flow of reading or browsing, every unfamiliar word is an opportunity lost to the friction of switching tabs. Sec. Lulu - an AI language learning assistant - hopes to bridge that gap by **recording new words as you go**, tailoring them into a **structured learning program** just for you.
 
 Instead of static dictionary entries, you receive AI-driven insights, usage examples, and creative stories that turn abstract characters into memorable concepts.</p>
 
@@ -19,30 +19,45 @@ The setup is local, no cloud, no data collection. Just you and your language lea
 
 - Chinese
 
+> <img align="right" alt="cover" src="./.misc/monitor.png" width=25% height=25%>
+
 ## Features
 
-- Monitors clipboard for new words
-- Organises word learning data into a personal profile
+- Monitors **unfamiliar Chinese content (words, sentences...)** as you go (currently supporting: clipboard monitoring)
+- Interactive AI response with **5 built-in modes**, integrated look-up
+- Organises learning data into a personal profile
 - *Daily "What you learned" summaries with tips, reviews and exercises (in progress*)
 
-> <img align="right" alt="cover" src="./.misc/example.png" width=35% height=35%>
+
 <p>
 
 ### Modes
 
-- **Lookup-only**: fastest, searches individual words on local dictionary
-- **Simple**: fast, short,concise response from AI
-- **Detailed**: immersive response from AI
+> <img align="right" alt="cover" src="./.misc/example2.png" width=35% height=35%>
 
-**To-Do:**
+- **Lookup-only**: fastest,breaks down content and looks individual words on local dictionary
+- **Sparkle Notes**: one quick, memorable word image
+- **Immersion Mode**: an immersive experience surrounding the word
+- **Word Blossom**: provides abstract images of words, from a different perspective (*not fully done*)
+- **Sentence Whisper**: Breaks down important words, simplifies the sentence, memorable hook... (*not fully done*)
+
+## Tech stack
+
+- **Python** for core logic
+- **Ollama**: Qwen
+
+## Installation guide
+
+Please refer to the [GUIDE.md](./GUIDE.md) file
+
+
+## To-Do
 
 - [x] **Anki-based** word review session
 - [x] Home: Better "What you learned" summaries (scrollable box, update AI profile)
 - [x] Improved challenge+summary  ~~(change to: mixed language maybe?)~~
-- [x] Integrated lookup mode(word hover: show translation + quick def) 
 - [x] ~~EasyOCR integration because Powertoys OCR messed it up sometimes~~ Powertoys OCR is enough for normal uses
 - [ ] ~~No pre-load model~~
-- [x] loading ccedict too long
 - [ ] Handle sentences
 - [x] **Click - popup/replace with Eng word**
 - [ ] Word & sentence graph
@@ -58,6 +73,7 @@ The setup is local, no cloud, no data collection. Just you and your language lea
 - [ ] ~~Normal sentence + words mode~~
 - [ ] Full Sentence mode(word pick UI: show translation + quick def +  switch to mixed language) (integrated revision, better explanation on long-complex sentences)
 
+- [ ] **Refactor main.py for simplicity** & consistent long popup format following main.py
 - [ ] More test cases for each mode for debugging
 - [ ] Recall & discuss on previous words (mempalace?)
 - [ ] CHENGYU study
@@ -71,15 +87,6 @@ The setup is local, no cloud, no data collection. Just you and your language lea
 - [ ] Card UI
 - [ ] Bunch of db.py and reviewer.py errors
 - [ ] Removing None from ControlPanel breaks everything
-
-## Tech stack
-
-- **Python** for core logic
-- **Ollama**: Qwen
-
-## Installation guide
-
-Please refer to the [GUIDE.md](./GUIDE.md) file
 
 ## Bugs
 
