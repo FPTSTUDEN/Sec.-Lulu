@@ -1,3 +1,4 @@
+#lib/windows.py
 import tkinter as tk
 import tkinter.font as tkfont
 import tkinter.messagebox as tkmb
@@ -6,6 +7,7 @@ import os
 import threading
 from PIL import Image, ImageTk
 import random
+from lib.sentence_explorer import SentenceExplorerFrame
 
 MODES=["Lookup Only","Sparkle Notes","Immersion Mode", "Word Blossom", "Sentence Whisper"]
 
@@ -429,11 +431,18 @@ class ControlPanel:
         self.root.destroy()
 
 
-def popup_message(title, message):
+def popup_message(title, message, is_yes_no=False):
+    """Show popup message. Returns bool if is_yes_no=True."""
     root = tk.Tk()
     root.withdraw()
-    tkmb.showinfo(title, message)
-    root.destroy()
+    if is_yes_no:
+        result = tkmb.askyesno(title, message)
+        root.destroy()
+        return result
+    else:
+        tkmb.showinfo(title, message)
+        root.destroy()
+        return None
 
 
 class Long_message_popup:
@@ -577,22 +586,30 @@ class ReviewFrame(ctk.CTkFrame):
             self._update_display()
 
 
+# In windows.py, modify HomeFrame.__init__:
+
 class HomeFrame(ctk.CTkFrame):
-    def __init__(self, master, ai_client, db, control_panel=None, **kwargs):
+    def __init__(self, master, ai_client, db, control_panel=None, 
+                 word_index=None, char_def_index=None, **kwargs):
         super().__init__(master, **kwargs)
         self.ai = ai_client
         self.db = db
         self.control_panel = control_panel
         self.is_generating = False
         
-        # CEDICT indices
-        self.word_index = {}
-        self.char_def_index = {}
-        try:
-            from lib.ccedict import load_cedict_entries
-            _, self.word_index, _, self.char_def_index = load_cedict_entries("cedict_ts.u8")
-        except Exception:
-            pass
+        # Use passed indices or load them
+        self.word_index = word_index if word_index is not None else {}
+        self.char_def_index = char_def_index if char_def_index is not None else {}
+        
+        # Only load if not provided
+        if not self.word_index and not self.char_def_index:
+            try:
+                from lib.ccedict import load_cedict_entries
+                _, self.word_index, _, self.char_def_index = load_cedict_entries("cedict_ts.u8")
+            except Exception:
+                pass
+        
+        # ... rest of __init__ remains the same
         
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
@@ -708,6 +725,12 @@ class HomeFrame(ctk.CTkFrame):
         widget.configure(state="disabled")
 
 
+# In windows.py, modify the App.__init__ method:
+
+# Add to windows.py - modifications
+
+# In the App class __init__, add the import and new frame:
+
 class App(ctk.CTk):
     def __init__(self, reviewer, ai_client=None, db=None, control_panel=None):
         super().__init__()
@@ -721,25 +744,45 @@ class App(ctk.CTk):
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
+        # Load CEDICT indices at App level
+        self.word_index = {}
+        self.char_def_index = {}
+        try:
+            from lib.ccedict import load_cedict_entries
+            _, self.word_index, _, self.char_def_index = load_cedict_entries("cedict_ts.u8")
+        except Exception as e:
+            print(f"Could not load CEDICT: {e}")
+
         # Sidebar
         self.sidebar = ctk.CTkFrame(self, width=140, corner_radius=0)
         self.sidebar.grid(row=0, column=0, sticky="nsew")
         ctk.CTkLabel(self.sidebar, text="VocabMaster", font=ctk.CTkFont(size=20, weight="bold")).grid(row=0, column=0, padx=20, pady=20)
         ctk.CTkButton(self.sidebar, text="Home", command=lambda: self.show_frame("home")).grid(row=1, column=0, padx=20, pady=10)
         ctk.CTkButton(self.sidebar, text="Review", command=lambda: self.show_frame("review")).grid(row=2, column=0, padx=20, pady=10)
+        ctk.CTkButton(self.sidebar, text="📖 Sentence Explorer", 
+                      command=lambda: self.show_frame("explorer")).grid(row=3, column=0, padx=20, pady=10)
 
         # Frames
         self.frames = {
-            "home": HomeFrame(self, self.ai_client, self.db, control_panel=self.control_panel, fg_color="transparent"),
-            "review": ReviewFrame(self, self.reviewer, fg_color="transparent")
+            "home": HomeFrame(self, self.ai_client, self.db, control_panel=self.control_panel, 
+                             word_index=self.word_index, char_def_index=self.char_def_index, 
+                             fg_color="transparent"),
+            "review": ReviewFrame(self, self.reviewer, fg_color="transparent"),
+            "explorer": SentenceExplorerFrame(self, self.ai_client, self.db, 
+                                              word_index=self.word_index, 
+                                              char_def_index=self.char_def_index,
+                                              fg_color="transparent")
         }
+        
+        for frame in self.frames.values():
+            frame.grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
+        
         self.show_frame("home")
-
+    
     def show_frame(self, page_name):
         for frame in self.frames.values():
             frame.grid_forget()
         self.frames[page_name].grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
-
 
 if __name__ == "__main__":
     popup_message("Test Message", "This is a test message to verify the popup_message function is working correctly.")
