@@ -33,13 +33,13 @@ The setup is local, no cloud, no data collection. Just you and your language lea
 
 ### Modes
 
-> <img align="right" alt="cover" src="./.misc/example2.png" width=35% height=35%>
+> <img align="right" alt="cover" src="./.misc/example2.png" width=50% height=50%>
 
-- **Lookup-only**: fastest,breaks down content and looks individual words on local dictionary
-- **Sparkle Notes**: one quick, memorable word image
-- **Immersion Mode**: an immersive experience surrounding the word
-- **Word Blossom**: provides abstract images of words, from a different perspective (*not fully done*)
-- **Sentence Whisper**: Breaks down important words, simplifies the sentence, memorable hook... (*not fully done*)
+- **Lookup-only**: fastest, breaks down content and looks individual words on local dictionary
+- **✨ Sparkle Notes**: one quick, memorable word image
+- **🌸 Immersion Mode**: an immersive experience surrounding the word
+- **🌼 Word Blossom Mode**: provides abstract images of words, from a different perspective (*not fully done*)
+- **💫 Sentence Whisper**: Breaks down important words, simplifies the sentence, memorable hook... (*not fully done*)
 
 ## Tech stack
 
@@ -60,7 +60,9 @@ Please refer to the [GUIDE.md](./GUIDE.md) file
 - [ ] ~~No pre-load model~~
 - [ ] Handle sentences
 - [x] **Click - popup/replace with Eng word**
-- [ ] Word & sentence graph
+- [x] Word & sentence graph
+  - [ ] Building connections
+  - [ ] AI Recommendation engine
 - [ ] auto picker for modes
 - [ ] **Chinese mode + TTS**
 - [ ] MEMORY solution for AI with ADHD & dementia

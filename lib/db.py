@@ -114,7 +114,50 @@ class VocabDatabase:
                 FOREIGN KEY(sentence_id) REFERENCES analyzed_sentences(id) ON DELETE CASCADE
             )
         """)
-        
+
+        # ===== SESSION MANAGEMENT TABLES =====
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS learning_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT UNIQUE,
+                session_type TEXT,
+                source_name TEXT,
+                start_time INTEGER,
+                end_time INTEGER,
+                is_active BOOLEAN DEFAULT 1,
+                word_count INTEGER DEFAULT 0
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS session_words (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT,
+                word_id TEXT,
+                added_at INTEGER,
+                FOREIGN KEY(session_id) REFERENCES learning_sessions(session_id),
+                FOREIGN KEY(word_id) REFERENCES words(id)
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS session_clusters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cluster_name TEXT,
+                created_at INTEGER,
+                theme TEXT
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS cluster_sessions (
+                cluster_id INTEGER,
+                session_id TEXT,
+                FOREIGN KEY(cluster_id) REFERENCES session_clusters(id),
+                FOREIGN KEY(session_id) REFERENCES learning_sessions(session_id)
+            )
+        """)
         conn.commit()
         conn.close()
     
@@ -400,6 +443,155 @@ class VocabDatabase:
             self._local.conn.close()
             self._local.conn = None
     
+        # ===== SESSION MANAGEMENT METHODS =====
+
+    def create_session(self, session_type: str, source_name: str = None) -> str:
+        """Create a new learning session. Returns session_id."""
+        import uuid
+        session_id = str(uuid.uuid4())[:8]
+        now = int(time.time())
+        
+        cursor = self._get_cursor()
+        cursor.execute("""
+            INSERT INTO learning_sessions (session_id, session_type, source_name, start_time, is_active)
+            VALUES (?, ?, ?, ?, 1)
+        """, (session_id, session_type, source_name, now))
+        self._get_connection().commit()
+        return session_id
+
+    def end_session(self, session_id: str):
+        """End an active session."""
+        cursor = self._get_cursor()
+        cursor.execute("""
+            UPDATE learning_sessions 
+            SET end_time = ?, is_active = 0 
+            WHERE session_id = ?
+        """, (int(time.time()), session_id))
+        self._get_connection().commit()
+
+    def get_active_session(self) -> Optional[Dict]:
+        """Get the currently active session."""
+        cursor = self._get_cursor()
+        cursor.execute("""
+            SELECT session_id, session_type, source_name, start_time, word_count
+            FROM learning_sessions
+            WHERE is_active = 1
+            ORDER BY start_time DESC
+            LIMIT 1
+        """)
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "session_id": row[0],
+            "session_type": row[1],
+            "source_name": row[2],
+            "start_time": row[3],
+            "word_count": row[4]
+        }
+
+    def add_word_to_session(self, session_id: str, word_id: str):
+        """Link a word to a session."""
+        cursor = self._get_cursor()
+        cursor.execute("""
+            INSERT OR IGNORE INTO session_words (session_id, word_id, added_at)
+            VALUES (?, ?, ?)
+        """, (session_id, word_id, int(time.time())))
+        
+        cursor.execute("""
+            UPDATE learning_sessions 
+            SET word_count = (SELECT COUNT(*) FROM session_words WHERE session_id = ?)
+            WHERE session_id = ?
+        """, (session_id, session_id))
+        self._get_connection().commit()
+
+    def get_session_words(self, session_id: str) -> List[Dict]:
+        """Get all words in a session."""
+        cursor = self._get_cursor()
+        cursor.execute("""
+            SELECT w.word, w.translation, sw.added_at
+            FROM session_words sw
+            JOIN words w ON sw.word_id = w.id
+            WHERE sw.session_id = ?
+            ORDER BY sw.added_at
+        """, (session_id,))
+        return [{"word": r[0], "translation": r[1], "added_at": r[2]} for r in cursor.fetchall()]
+
+    def get_all_sessions(self, limit: int = 20) -> List[Dict]:
+        """Get all sessions for browsing."""
+        cursor = self._get_cursor()
+        cursor.execute("""
+            SELECT session_id, session_type, source_name, start_time, end_time, word_count
+            FROM learning_sessions
+            ORDER BY start_time DESC
+            LIMIT ?
+        """, (limit,))
+        return [{
+            "session_id": r[0],
+            "session_type": r[1],
+            "source_name": r[2],
+            "start_time": r[3],
+            "end_time": r[4],
+            "word_count": r[5]
+        } for r in cursor.fetchall()]
+
+    def find_related_sessions(self, session_id: str) -> List[Dict]:
+        """Find sessions with overlapping vocabulary."""
+        cursor = self._get_cursor()
+        cursor.execute("""
+            WITH session_words AS (
+                SELECT word_id FROM session_words WHERE session_id = ?
+            )
+            SELECT DISTINCT ls.session_id, ls.session_type, ls.source_name, 
+                COUNT(sw.word_id) as common_words
+            FROM learning_sessions ls
+            JOIN session_words sw ON ls.session_id = sw.session_id
+            WHERE sw.word_id IN (SELECT word_id FROM session_words)
+            AND ls.session_id != ?
+            GROUP BY ls.session_id
+            ORDER BY common_words DESC
+            LIMIT 5
+        """, (session_id, session_id))
+        return [{
+            "session_id": r[0],
+            "session_type": r[1],
+            "source_name": r[2],
+            "common_words": r[3]
+        } for r in cursor.fetchall()]
+
+    def create_session_cluster(self, session_ids: List[str], theme: str = None) -> int:
+        """Group multiple related sessions into a cluster."""
+        now = int(time.time())
+        cursor = self._get_cursor()
+        cursor.execute("""
+            INSERT INTO session_clusters (cluster_name, created_at, theme)
+            VALUES (?, ?, ?)
+        """, (f"Cluster_{now}", now, theme))
+        cluster_id = cursor.lastrowid
+        
+        for session_id in session_ids:
+            cursor.execute("""
+                INSERT INTO cluster_sessions (cluster_id, session_id)
+                VALUES (?, ?)
+            """, (cluster_id, session_id))
+        
+        self._get_connection().commit()
+        return cluster_id
+
+    def get_session_clusters(self) -> List[Dict]:
+        """Get all session clusters."""
+        cursor = self._get_cursor()
+        cursor.execute("""
+            SELECT id, cluster_name, created_at, theme
+            FROM session_clusters
+            ORDER BY created_at DESC
+        """)
+        return [{
+            "id": r[0],
+            "cluster_name": r[1],
+            "created_at": r[2],
+            "theme": r[3]
+        } for r in cursor.fetchall()]
     def __enter__(self):
         return self
     

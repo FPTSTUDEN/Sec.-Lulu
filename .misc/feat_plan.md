@@ -1,3 +1,35 @@
+# Structure proposal
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    COMPLETE LEARNING CYCLE                       │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  1. USER LEARNS NEW WORDS                                        │
+│     ↓                                                            │
+│  2. GRAPH BUILDS CONNECTIONS                                     │
+│     (江湖 ←→ 武林, 英雄 ←→ 侠客)                                 │
+│     ↓                                                            │
+│  3. FEATURE 3: CONCEPT CLUSTERING                                │
+│     Groups words into "Wuxia Martial Arts" cluster              │
+│     ↓                                                            │
+│  4. FEATURE 2: LEARNING PATH                                     │
+│     Suggests 武林 after mastering 江湖                           │
+│     ↓                                                            │
+│  5. FEATURE 4: SMART REVIEW                                      │
+│     When user forgets 江湖, 武林 moves up in queue               │
+│     ↓                                                            │
+│  6. USER REVIEWS CONNECTED WORDS TOGETHER                        │
+│     (Better retention, deeper understanding)                    │
+│     ↓                                                            │
+│  (Loop back to step 2)                                          │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+Priority	Feature	Effort	Value
+1	Session-based clustering	Low	Very High
+2	Shared sentence reference (already have)	Zero	High
+3	Session themes (AI extracts theme from session)	Medium	Medium
 - Language is acquired when we UNDERSTAND the MESSAGE
 
 ## maybe instead of individual words, try:
@@ -144,3 +176,376 @@ User practices production without pressure. Co-creation = joy.
 ---
 
 Would you like me to produce a **second revised Modelfile** that bakes in 3–5 of these (e.g., Echo & Fade, Contrast Slots, and Weave for Me) so you can test it immediately?
+
+# Next Features Discussion for Xiao Xi
+
+Based on your current implementation (sentence explorer, priority notes, session management, and graph-based clustering), here are the most valuable next features to consider.
+
+---
+
+## Feature Priority Matrix
+
+| Priority | Feature | Complexity | Value | Dependencies |
+|----------|---------|------------|-------|--------------|
+| **P0** | Smart Review Queue (Graph-Weighted) | Medium | Very High | Session clusters, word connections |
+| **P0** | Session-Based Learning Path | Medium | Very High | Session clusters |
+| **P1** | Vocabulary Heatmap | Low | Medium | Word mastery data |
+| **P1** | Export to Anki/Flashcard Apps | Low | Medium | None |
+| **P1** | Word Connection Visualization | Medium | Medium | Graph edges |
+| **P2** | AI-Powered Session Clustering | High | High | Session data, LLM |
+| **P2** | Pronunciation Practice Mode | Medium | Medium | TTS integration |
+| **P2** | Collaborative Annotations | High | Low | User accounts |
+| **P3** | Mobile Companion App | Very High | Medium | Full API |
+
+---
+
+## P0 Features (Highest Priority)
+
+### 1. Smart Review Queue (Graph-Weighted)
+
+**What it does:** Enhances your existing SM-2 review system with graph weights. When you fail a word, related words also get higher priority.
+
+**How it works currently:**
+```
+User fails "江湖" → SM-2 lowers its score → only "江湖" moves up in queue
+```
+
+**How it would work:**
+```
+User fails "江湖" → SM-2 lowers its score → Graph finds related words (武林, 门派, 侠客) → All move up proportionally
+```
+
+**Implementation approach:**
+```python
+def get_smart_review_queue(self, limit=20):
+    """Get review queue weighted by graph connections."""
+    
+    # Get base SM-2 scores
+    base_queue = self.get_due_words()
+    
+    # For each word, calculate graph boost
+    for word in base_queue:
+        # Find related words that are also due
+        related = self.get_connected_words(word['id'], depth=1)
+        boost = sum(1 for r in related if r in due_words) * 0.3
+        word['priority'] = word['base_priority'] + boost
+    
+    # Sort by boosted priority
+    return sorted(base_queue, key=lambda x: x['priority'], reverse=True)
+```
+
+**User experience:**
+```
+📚 Smart Review Queue (8 words due)
+
+Priority order:
+1. 江湖 (martial world) - [due today] ← you failed this yesterday
+2. 武林 (martial forest) - [boosted from related] ← automatically moved up!
+3. 门派 (martial sect) - [boosted]
+4. 苹果 (apple) - [normal priority]
+```
+
+**Why this matters:** Prevents the "I forgot one word from a cluster, now I'm rusty on all of them" problem.
+
+---
+
+### 2. Session-Based Learning Path
+
+**What it does:** Uses your session clusters to recommend "what to learn next" based on what you've already studied.
+
+**How it works:**
+```
+Session clusters detected:
+- "Wuxia Martial Arts" (sessions: 江湖, 武林, 侠客) - 70% mastered
+- "Modern Life" (sessions: 手机, 电脑, 网络) - 30% mastered
+
+Recommendation: Complete "Modern Life" cluster first (more new words) or reinforce "Wuxia" (almost done)?
+```
+
+**Implementation approach:**
+```python
+def get_learning_path_recommendations(self):
+    """Analyze session clusters and recommend next steps."""
+    
+    clusters = self.get_session_clusters()
+    recommendations = []
+    
+    for cluster in clusters:
+        words = self.get_cluster_words(cluster)
+        mastered = sum(1 for w in words if w['mastered'])
+        percentage = mastered / len(words)
+        
+        if percentage < 0.3:
+            recommendations.append({
+                'cluster': cluster,
+                'action': 'Start learning this cluster',
+                'reason': f'{len(words)} new words to discover'
+            })
+        elif 0.3 <= percentage < 0.7:
+            recommendations.append({
+                'cluster': cluster,
+                'action': 'Continue building this cluster',
+                'reason': f'{len(words) - mastered} words remaining'
+            })
+        elif percentage >= 0.7:
+            recommendations.append({
+                'cluster': cluster,
+                'action': 'Review and reinforce',
+                'reason': 'Almost mastered! Keep it fresh.'
+            })
+    
+    return recommendations
+```
+
+**User experience:**
+```
+🎯 Learning Path Recommendations
+
+Based on your 5 study sessions:
+
+🔴 HIGH PRIORITY
+┌─────────────────────────────────────────────────────────────┐
+│ 🌟 New Cluster Detected: "Technology"                       │
+│ Words: 电脑, 手机, 网络, 软件, 硬件                          │
+│ Progress: 0/5 mastered                                      │
+│ [Start Learning]                                            │
+└─────────────────────────────────────────────────────────────┘
+
+🟡 IN PROGRESS
+┌─────────────────────────────────────────────────────────────┐
+│ 📚 "Wuxia Martial Arts"                                     │
+│ Progress: 7/10 mastered (70%)                               │
+│ Words remaining: 内力, 轻功, 暗器                           │
+│ [Continue] [Review Mastered]                                │
+└─────────────────────────────────────────────────────────────┘
+
+🟢 MAINTENANCE
+┌─────────────────────────────────────────────────────────────┐
+│ ✅ "Food & Dining"                                          │
+│ Progress: 12/12 mastered                                    │
+│ Last reviewed: 2 weeks ago                                  │
+│ [Review Cluster]                                            │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## P1 Features (Medium Priority)
+
+### 3. Vocabulary Heatmap
+
+**What it does:** Visual representation of your vocabulary mastery across different topics/sessions.
+
+**Visual design:**
+```
+Your Vocabulary Heatmap
+┌─────────────────────────────────────────────────────────────┐
+│                                                              │
+│ Wuxia      ████████████░░░░░░░░  60% (6/10 words)           │
+│ Technology ████░░░░░░░░░░░░░░░░  20% (2/10 words)           │
+│ Food       ████████████████████  100% (8/8 words)           │
+│ Emotions   ████████░░░░░░░░░░░░  40% (4/10 words)           │
+│ Travel     ██████████░░░░░░░░░░  50% (5/10 words)           │
+│                                                              │
+│ [Click any bar to see word list]                            │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Calendar heatmap (like GitHub contributions):**
+```
+December 2024
+Mon Tue Wed Thu Fri Sat Sun
+ 2   3   4   5   6   7   8
+██  ██  ██  ░░  ██  ██  ░░
+ 9  10  11  12  13  14  15
+██  ░░  ██  ██  ██  ░░  ██
+...
+Darker squares = more words learned that day
+```
+
+---
+
+### 4. Export to Anki/Flashcard Apps
+
+**What it does:** Export your learned words and sentences to popular flashcard formats.
+
+**Export options:**
+```
+┌─────────────────────────────────────────────────────────────┐
+│ 📤 Export Vocabulary                                        │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│ Format:                                                     │
+│ ○ Anki (.apkg)     ○ CSV (Excel)    ○ JSON (Developer)     │
+│ ○ Quizlet          ○ Plain Text     ○ PDF (Printable)       │
+│                                                              │
+│ What to export:                                             │
+│ ☑️ Words with translations                                  │
+│ ☑️ Example sentences                                        │
+│ ☑️ Priority notes                                           │
+│ ☑️ Session clusters as decks                                │
+│                                                              │
+│ Selected: "Wuxia Martial Arts" cluster (10 words)           │
+│                                                              │
+│ [Export] [Preview]                                          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Anki deck structure:**
+```
+Front: 江湖
+Back: 
+- Pinyin: jiāng hú
+- Meaning: martial world, the world of martial artists
+- Sentence: 江湖上流传着一个传说
+- Tags: wuxia, location
+- Note: Learned from "Legend of the Sword" session
+```
+
+---
+
+### 5. Word Connection Visualization
+
+**What it does:** Interactive graph showing how your words connect to each other.
+
+**Visual (using a library like pyvis or networkx):**
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Word Connection Graph                          [Zoom: 100%] │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│                      ┌─────────┐                            │
+│                      │  江湖   │                            │
+│                      └────┬────┘                            │
+│                           │                                  │
+│            ┌──────────────┼──────────────┐                  │
+│            ▼              ▼              ▼                  │
+│      ┌─────────┐   ┌─────────┐   ┌─────────┐               │
+│      │  武林   │   │  侠客   │   │  门派   │               │
+│      └────┬────┘   └────┬────┘   └────┬────┘               │
+│           │             │             │                      │
+│           ▼             ▼             ▼                      │
+│      ┌─────────┐   ┌─────────┐   ┌─────────┐               │
+│      │  武功   │   │  英雄   │   │  师父   │               │
+│      └─────────┘   └─────────┘   └─────────┘               │
+│                                                              │
+│ Legend: ● Mastered  ● Learning  ● Not started               │
+│ [Click any node to review]                                  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Interaction:**
+- Click a word → shows definition + option to review
+- Double-click → opens full word explanation
+- Drag to rearrange
+- Zoom in/out
+
+---
+
+## P2 Features (Nice to Have)
+
+### 6. AI-Powered Session Clustering
+
+**What it does:** Automatically detect themes across sessions using AI, even when words don't explicitly overlap.
+
+**How it works:**
+```
+Session A: 江湖, 武林, 侠客 (explicitly related - easy to cluster)
+Session B: 剑, 刀, 枪 (weapons - related but no word overlap with A)
+Session C: 战斗, 胜利, 失败 (battle concepts - also related)
+
+AI analysis: These three sessions belong to "Wuxia Martial Arts" cluster
+```
+
+**Implementation:**
+```python
+def ai_cluster_sessions(self):
+    """Use LLM to detect thematic connections between sessions."""
+    
+    # Get all sessions with their words
+    sessions = self.get_all_sessions()
+    
+    # Create prompt for LLM
+    prompt = f"""
+    Analyze these learning sessions and group them by theme:
+    
+    {sessions_data}
+    
+    Return clusters with:
+    - Theme name
+    - Sessions in cluster
+    - Why they're related
+    """
+    
+    response = ollama.generate(model='qwen3:1.7b', prompt=prompt)
+    return parse_clusters(response)
+```
+
+---
+
+### 7. Pronunciation Practice Mode
+
+**What it does:** Uses TTS to help practice pronunciation with instant feedback.
+
+**User flow:**
+```
+┌─────────────────────────────────────────────────────────────┐
+│ 🎤 Pronunciation Practice                                   │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│ Current word: 江湖 (jiāng hú)                                │
+│                                                              │
+│ [🔊 Listen] [🎙️ Record] [⏸️ Stop]                           │
+│                                                              │
+│ Your recording: ████████░░░░░░░░░░░░                        │
+│                                                              │
+│ Feedback: "Good! Your 'jiang' tone needs to be flatter.     │
+│            Listen again: 🔊"                                 │
+│                                                              │
+│ [Next Word] [Repeat] [Show Pinyin]                          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 8. Collaborative Annotations (Multi-User)
+
+**What it does:** Share notes and explanations with other learners.
+
+**Features:**
+- Public/private notes on sentences
+- Upvote helpful explanations
+- Comment threads on difficult words
+- Community-contributed example sentences
+
+**Privacy consideration:** Local-first, optional cloud sync.
+
+---
+
+## Suggested Roadmap
+
+```
+Week 1-2: Smart Review Queue + Learning Path
+Week 3: Vocabulary Heatmap
+Week 4: Export to Anki
+Week 5-6: Word Connection Visualization
+Week 7-8: AI-Powered Clustering (if needed)
+Week 9+: Pronunciation + Collaboration (optional)
+```
+
+---
+
+## Which Feature Should You Build Next?
+
+| If your priority is... | Build this first |
+|------------------------|------------------|
+| **Better retention** | Smart Review Queue |
+| **Guidance on what to learn** | Learning Path |
+| **Seeing progress** | Vocabulary Heatmap |
+| **Portability** | Export to Anki |
+| **Visual learners** | Word Connection Graph |
+| **Automation** | AI Clustering |
+
+**My recommendation:** Start with **Smart Review Queue** (P0). It directly improves the core learning loop and leverages your existing session/graph infrastructure. The learning path can come immediately after, as it shares the same cluster data.
+
+Would you like me to generate the implementation code for any of these features?

@@ -7,6 +7,7 @@ import os
 import threading
 from PIL import Image, ImageTk
 import random
+from datetime import datetime
 from lib.sentence_explorer import SentenceExplorerFrame
 
 MODES=["Lookup Only","Sparkle Notes","Immersion Mode", "Word Blossom", "Sentence Whisper"]
@@ -266,11 +267,12 @@ class ThinkBox(customtkinter.CTkFrame):
 
 
 class ControlPanel:
-    def __init__(self, app_callback=None, ai_client:OllamaClient=OllamaClient()): 
+    def __init__(self, app_callback=None, ai_client:OllamaClient=OllamaClient(), db=None): 
         customtkinter.set_appearance_mode("dark")
         customtkinter.set_default_color_theme(os.path.join(current_folder, "theme.json"))
 
         self.ai = ai_client
+        self.db = db
         self.ai_opened = True
         self.opened = False
         self.done = False
@@ -305,6 +307,25 @@ class ControlPanel:
         self.session_send = ctk.CTkButton(self.top_line_frame, text="💬", width=40, command=lambda: setattr(self, 'session_context', self.session_entry.get()))
         self.session_send.pack(side="right", padx=(5,0))
 
+        # Session management controls
+        session_control_frame = ctk.CTkFrame(self.top_line_frame, fg_color="transparent")
+        session_control_frame.pack(side="right", padx=5)
+
+        self.session_status_label = ctk.CTkLabel(session_control_frame, text="📚 No session", 
+                                                font=ctk.CTkFont(size=10), text_color="gray")
+        self.session_status_label.pack(side="left", padx=2)
+
+        self.new_session_btn = ctk.CTkButton(session_control_frame, text="📂", width=30, height=25,
+                                            command=self._create_new_session)
+        self.new_session_btn.pack(side="left", padx=2)
+
+        self.end_session_btn = ctk.CTkButton(session_control_frame, text="⏹️", width=30, height=25,
+                                            fg_color="orange", command=self._end_current_session)
+        self.end_session_btn.pack(side="left", padx=2)
+
+        self.session_list_btn = ctk.CTkButton(session_control_frame, text="📜", width=30, height=25,
+                                            command=self._show_session_list)
+        self.session_list_btn.pack(side="left", padx=2)
         # Buttons Frame
         self.buttons_frame = ctk.CTkFrame(self.root, fg_color="transparent")
         self.buttons_frame.pack(side="top", fill="x", padx=10, pady=5)
@@ -423,6 +444,130 @@ class ControlPanel:
         if self.app_callback:
             self.app_callback()
 
+    def _create_new_session(self):
+        """Create a new learning session from ControlPanel."""
+        if self.db is None:
+            popup_message("Database Missing", "Session management requires a database connection.", parent=self.root)
+            return
+
+        popup = ctk.CTkToplevel(self.root)
+        popup.geometry("300x250")
+        popup.title("New Session")
+        popup.attributes("-topmost", True)
+        
+        ctk.CTkLabel(popup, text="Create New Learning Session", font=ctk.CTkFont(weight="bold")).pack(pady=10)
+        
+        ctk.CTkLabel(popup, text="Session Type:").pack(anchor="w", padx=20)
+        type_var = ctk.StringVar(value="General")
+        type_menu = ctk.CTkOptionMenu(popup, values=["Manhua", "Song", "News", "Conversation", "General"], 
+                                    variable=type_var)
+        type_menu.pack(fill="x", padx=20, pady=5)
+        
+        ctk.CTkLabel(popup, text="Source Name (optional):").pack(anchor="w", padx=20)
+        source_entry = ctk.CTkEntry(popup, placeholder_text="e.g., Legend of the Sword Ch3")
+        source_entry.pack(fill="x", padx=20, pady=5)
+        
+        def create():
+            source = source_entry.get().strip() or None
+            session_id = self.db.create_session(type_var.get(), source)
+            self._refresh_session_status()
+            popup.destroy()
+            popup_message("Session Created", f"Session {session_id} created!\nAdd words while studying to track them.", parent=self.root)
+        
+        ctk.CTkButton(popup, text="Create", command=create, fg_color="green").pack(pady=10)
+
+    def _end_current_session(self):
+        """End the current active session from ControlPanel."""
+        if self.db is None:
+            popup_message("Database Missing", "Session management requires a database connection.", parent=self.root)
+            return
+
+        active = self.db.get_active_session()
+        if not active:
+            popup_message("No Active Session", "No active session to end.", parent=self.root)
+            return
+        
+        if popup_message("End Session", f"End session '{active['session_type']}' with {active['word_count']} words?", is_yes_no=True, parent=self.root):
+            self.db.end_session(active['session_id'])
+            self._refresh_session_status()
+            popup_message("Session Ended", f"Session ended. {active['word_count']} words recorded.", parent=self.root)
+
+    def _refresh_session_status(self):
+        """Update session status display in ControlPanel."""
+        if self.db is None:
+            self.session_status_label.configure(text="📚 No session", text_color="gray")
+            return
+
+        active = self.db.get_active_session()
+        if active:
+            self.session_status_label.configure(text=f"📚 {active['session_type']}: {active['word_count']} words", 
+                                                text_color="green")
+        else:
+            self.session_status_label.configure(text="📚 No session", text_color="gray")
+
+    def _show_session_list(self):
+        """Show all sessions from ControlPanel."""
+        if self.db is None:
+            popup_message("Database Missing", "Session management requires a database connection.", parent=self.root)
+            return
+
+        sessions = self.db.get_all_sessions()
+        if not sessions:
+            popup_message("Sessions", "No sessions recorded yet.", parent=self.root)
+            return
+        
+        popup = ctk.CTkToplevel(self.root)
+        popup.geometry("700x500")
+        popup.title("Session Manager")
+        popup.attributes("-topmost", True)
+        
+        ctk.CTkLabel(popup, text="📚 Session Manager", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
+        
+        list_frame = ctk.CTkScrollableFrame(popup)
+        list_frame.pack(fill="both", expand=True, padx=20, pady=10)
+        
+        for s in sessions:
+            item_frame = ctk.CTkFrame(list_frame)
+            item_frame.pack(fill="x", pady=3)
+            
+            date_str = datetime.fromtimestamp(s['start_time']).strftime('%m-%d %H:%M')
+            type_icon = {"Manhua": "📖", "Song": "🎵", "News": "📰", "Conversation": "💬"}.get(s['session_type'], "📚")
+            status = "🟢" if s['end_time'] == 0 else "🔴"
+            
+            ctk.CTkLabel(item_frame, text=f"{status} {type_icon} {s['session_type']}", 
+                        font=ctk.CTkFont(weight="bold"), width=120).pack(side="left", padx=5)
+            ctk.CTkLabel(item_frame, text=s['source_name'][:30] if s['source_name'] else "Untitled", 
+                        width=150).pack(side="left", padx=5)
+            ctk.CTkLabel(item_frame, text=f"{s['word_count']} words", width=80).pack(side="left", padx=5)
+            ctk.CTkLabel(item_frame, text=date_str, width=100, text_color="gray").pack(side="left", padx=5)
+            
+            def view_words(sid=s['session_id']):
+                self._view_session_words(sid)
+                popup.destroy()
+            ctk.CTkButton(item_frame, text="View Words", width=80, command=view_words).pack(side="right", padx=5)
+
+    def _view_session_words(self, session_id: str):
+        """Show words in a specific session."""
+        words = self.db.get_session_words(session_id)
+        
+        popup = ctk.CTkToplevel(self.root)
+        popup.geometry("500x400")
+        popup.title(f"Session Words")
+        popup.attributes("-topmost", True)
+        
+        ctk.CTkLabel(popup, text=f"📚 Session: {session_id}", font=ctk.CTkFont(size=14, weight="bold")).pack(pady=10)
+        
+        if words:
+            list_frame = ctk.CTkScrollableFrame(popup)
+            list_frame.pack(fill="both", expand=True, padx=20, pady=10)
+            
+            for w in words:
+                word_frame = ctk.CTkFrame(list_frame)
+                word_frame.pack(fill="x", pady=2)
+                ctk.CTkLabel(word_frame, text=w['word'], font=ctk.CTkFont(weight="bold"), width=100).pack(side="left", padx=5)
+                ctk.CTkLabel(word_frame, text=w['translation'][:40], width=250).pack(side="left", padx=5)
+        else:
+            ctk.CTkLabel(popup, text="No words in this session yet.").pack(pady=20)
     def show(self):
         self.root.mainloop()
 
@@ -431,18 +576,24 @@ class ControlPanel:
         self.root.destroy()
 
 
-def popup_message(title, message, is_yes_no=False):
+def popup_message(title, message, is_yes_no=False, parent=None):
     """Show popup message. Returns bool if is_yes_no=True."""
-    root = tk.Tk()
-    root.withdraw()
-    if is_yes_no:
-        result = tkmb.askyesno(title, message)
-        root.destroy()
-        return result
-    else:
-        tkmb.showinfo(title, message)
-        root.destroy()
-        return None
+    root = parent or tk._default_root
+    created_root = False
+    if root is None:
+        root = tk.Tk()
+        root.withdraw()
+        created_root = True
+
+    try:
+        if is_yes_no:
+            return tkmb.askyesno(title, message, parent=root)
+        else:
+            tkmb.showinfo(title, message, parent=root)
+            return None
+    finally:
+        if created_root:
+            root.destroy()
 
 
 class Long_message_popup:

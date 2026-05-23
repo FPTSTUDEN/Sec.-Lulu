@@ -28,6 +28,7 @@ class SentenceExplorerFrame(ctk.CTkFrame):
         self.char_def_index = char_def_index or {}
         self.current_analysis_id = None
         self.current_content_id = None
+        self.current_session_id = None
         self.windows = None
         self._setup_ui()
     
@@ -60,6 +61,34 @@ class SentenceExplorerFrame(ctk.CTkFrame):
         self.title_entry = ctk.CTkEntry(option_frame, width=200, placeholder_text="Optional")
         self.title_entry.pack(side="left", padx=5)
         
+        # ===== SESSION CONTROLS =====
+        session_frame = ctk.CTkFrame(option_frame, fg_color="transparent")
+        session_frame.pack(side="left", padx=10)
+        
+        ctk.CTkLabel(session_frame, text="🎯 Session:").pack(side="left")
+        
+        self.session_var = ctk.StringVar(value="Auto")
+        session_options = ["Auto", "Manhua", "Song", "News", "Conversation", "General"]
+        self.session_menu = ctk.CTkOptionMenu(session_frame, values=session_options, 
+                                               variable=self.session_var, width=90)
+        self.session_menu.pack(side="left", padx=5)
+        
+        self.session_status_label = ctk.CTkLabel(session_frame, text="", font=ctk.CTkFont(size=10))
+        self.session_status_label.pack(side="left", padx=5)
+        
+        self.new_session_btn = ctk.CTkButton(session_frame, text="📂", width=30, height=25,
+                                              command=self._create_new_session)
+        self.new_session_btn.pack(side="left", padx=2)
+        
+        self.end_session_btn = ctk.CTkButton(session_frame, text="⏹️", width=30, height=25,
+                                              fg_color="orange", command=self._end_current_session)
+        self.end_session_btn.pack(side="left", padx=2)
+        
+        self.history_btn = ctk.CTkButton(session_frame, text="📜", width=30, height=25,
+                                          command=self._show_session_history)
+        self.history_btn.pack(side="left", padx=2)
+        
+        # Process buttons
         self.process_btn = ctk.CTkButton(option_frame, text="🔨 Analyze Text", command=self._analyze_text)
         self.process_btn.pack(side="right", padx=5)
         self.clear_btn = ctk.CTkButton(option_frame, text="🗑️ Clear", fg_color="gray", command=self._clear_all, width=80)
@@ -77,6 +106,86 @@ class SentenceExplorerFrame(ctk.CTkFrame):
         
         self.status_label = ctk.CTkLabel(self, text="", text_color="gray")
         self.status_label.grid(row=4, column=0, pady=5)
+        
+        # Refresh session status
+        self._refresh_session_status()
+    
+    def _create_new_session(self):
+        """Create a new learning session."""
+        win = self._get_windows()
+        
+        popup = ctk.CTkToplevel(self)
+        popup.geometry("300x250")
+        popup.title("New Session")
+        popup.attributes("-topmost", True)
+        
+        ctk.CTkLabel(popup, text="Create New Learning Session", font=ctk.CTkFont(weight="bold")).pack(pady=10)
+        
+        ctk.CTkLabel(popup, text="Session Type:").pack(anchor="w", padx=20)
+        type_var = ctk.StringVar(value="General")
+        type_menu = ctk.CTkOptionMenu(popup, values=["Manhua", "Song", "News", "Conversation", "General"], 
+                                       variable=type_var)
+        type_menu.pack(fill="x", padx=20, pady=5)
+        
+        ctk.CTkLabel(popup, text="Source Name (optional):").pack(anchor="w", padx=20)
+        source_entry = ctk.CTkEntry(popup, placeholder_text="e.g., Legend of the Sword Ch3")
+        source_entry.pack(fill="x", padx=20, pady=5)
+        
+        def create():
+            source = source_entry.get().strip() or None
+            self.current_session_id = self.db.create_session(type_var.get(), source)
+            self.session_var.set(type_var.get())
+            self._refresh_session_status()
+            popup.destroy()
+            win.popup_message("Session Created", f"Session created!\nAdd words while studying to track them.")
+        
+        ctk.CTkButton(popup, text="Create", command=create, fg_color="green").pack(pady=10)
+    
+    def _end_current_session(self):
+        """End the current active session."""
+        win = self._get_windows()
+        active = self.db.get_active_session()
+        if not active:
+            win.popup_message("No Active Session", "No active session to end.", parent=self)
+            return
+        
+        if win.popup_message("End Session", f"End session '{active['session_type']}' with {active['word_count']} words?", is_yes_no=True, parent=self):
+            self.db.end_session(active['session_id'])
+            self.current_session_id = None
+            self._refresh_session_status()
+            win.popup_message("Session Ended", f"Session ended. {active['word_count']} words recorded.", parent=self)
+    
+    def _refresh_session_status(self):
+        """Update session status display."""
+        active = self.db.get_active_session()
+        if active:
+            self.current_session_id = active['session_id']
+            self.session_status_label.configure(text=f"📚 {active['session_type']}: {active['word_count']} words", 
+                                                 text_color="green")
+        else:
+            self.current_session_id = None
+            self.session_status_label.configure(text="No active session", text_color="gray")
+    
+    def _get_or_create_session(self) -> str:
+        """Get active session or create new one based on user selection."""
+        session_type = self.session_var.get()
+        
+        if session_type == "Auto":
+            active = self.db.get_active_session()
+            if active:
+                return active['session_id']
+            else:
+                # Create default session
+                return self.db.create_session("General", "Auto-created")
+        else:
+            # Check if there's an active session of this type
+            active = self.db.get_active_session()
+            if active and active['session_type'] == session_type:
+                return active['session_id']
+            else:
+                # Create new session of selected type
+                source = self.title_entry.get().strip() or session_type
+                return self.db.create_session(session_type, source)
     
     def _split_sentences(self, text: str) -> List[str]:
         splitters = r'[。！？；\n]+'
@@ -84,14 +193,7 @@ class SentenceExplorerFrame(ctk.CTkFrame):
         return [s.strip() for s in raw_sentences if s.strip()]
     
     def _parse_ai_response(self, sentence: str, response: str, index: int) -> Dict:
-        """
-        Parse AI's sentence whisper response into structured data matching AI fields:
-        1. Key words to know (with insights)
-        2. What the sentence says (translation)
-        3. Simplified paraphrase
-        4. Why it matters
-        5. Remember it (memory hook)
-        """
+        """Parse AI's sentence whisper response into structured data."""
         analysis = {
             'index': index,
             'original': sentence,
@@ -103,11 +205,7 @@ class SentenceExplorerFrame(ctk.CTkFrame):
             'difficulty': 3
         }
         
-        # ===== 1. PARSE KEY WORDS =====
-        # Pattern: **word (pinyin)** - insight
-        # Or: - **word** - insight
-        # Or: • word (pinyin): insight
-        
+        # Parse Key words
         keywords_section = re.search(
             r'\*\*Key words? to know:\*\*(.*?)(?=\*\*What|\*\*Simplified|\*\*Why|\*\*Remember|\Z)', 
             response, re.DOTALL | re.IGNORECASE
@@ -115,36 +213,14 @@ class SentenceExplorerFrame(ctk.CTkFrame):
         
         if keywords_section:
             kw_text = keywords_section.group(1)
-            # Pattern 1: **word (pinyin)** - insight
-            pattern1 = r'\*\*([^*]+)\s*\(([^)]+)\)\*\*\s*[-–—:]\s*(.+?)(?=\n\s*[-•*]|\n\s*\*\*|\Z)'
-            # Pattern 2: - **word** - insight or • **word** - insight
-            pattern2 = r'[-•*]\s*\*\*([^*]+)\*\*\s*[-–—:]\s*(.+?)(?=\n\s*[-•*]|\n\s*\*\*|\Z)'
-            # Pattern 3: **word** - insight (no pinyin)
-            pattern3 = r'\*\*([^*]+)\*\*\s*[-–—:]\s*(.+?)(?=\n\s*[-•*]|\n\s*\*\*|\Z)'
-            
-            matches_found = False
-            
-            for match in re.finditer(pattern1, kw_text, re.DOTALL):
+            pattern = r'\*\*([^*]+)\s*\(([^)]+)\)\*\*\s*[-–—:]\s*(.+?)(?=\n\s*[-•*]|\n\s*\*\*|\Z)'
+            for match in re.finditer(pattern, kw_text, re.DOTALL):
                 word = match.group(1).strip()
                 pinyin = match.group(2).strip()
                 insight = match.group(3).strip()[:150]
                 analysis['keywords'].append({'word': word, 'pinyin': pinyin, 'insight': insight, 'importance': 0.7})
-                matches_found = True
-            
-            if not matches_found:
-                for match in re.finditer(pattern2, kw_text, re.DOTALL):
-                    word = match.group(1).strip()
-                    insight = match.group(2).strip()[:150]
-                    analysis['keywords'].append({'word': word, 'pinyin': '', 'insight': insight, 'importance': 0.7})
-                    matches_found = True
-            
-            if not matches_found:
-                for match in re.finditer(pattern3, kw_text, re.DOTALL):
-                    word = match.group(1).strip()
-                    insight = match.group(2).strip()[:150]
-                    analysis['keywords'].append({'word': word, 'pinyin': '', 'insight': insight, 'importance': 0.7})
         
-        # ===== 2. PARSE WHAT IT SAYS (TRANSLATION) =====
+        # Parse Translation
         trans_match = re.search(
             r'\*\*What it says?:\*\*(.*?)(?=\*\*Simplified|\*\*Why|\*\*Remember|\Z)', 
             response, re.DOTALL | re.IGNORECASE
@@ -152,7 +228,7 @@ class SentenceExplorerFrame(ctk.CTkFrame):
         if trans_match:
             analysis['translation'] = trans_match.group(1).strip()[:300]
         
-        # ===== 3. PARSE SIMPLIFIED PARAPHRASE =====
+        # Parse Simplified paraphrase
         simple_match = re.search(
             r'\*\*Simplified(?: Chinese)?(?: paraphrase)?:\*\*(.*?)(?=\*\*Why|\*\*Remember|\Z)', 
             response, re.DOTALL | re.IGNORECASE
@@ -160,7 +236,7 @@ class SentenceExplorerFrame(ctk.CTkFrame):
         if simple_match:
             analysis['simplified_paraphrase'] = simple_match.group(1).strip()[:200]
         
-        # ===== 4. PARSE WHY IT MATTERS =====
+        # Parse Why matters
         why_match = re.search(
             r'\*\*Why it matters?:\*\*(.*?)(?=\*\*Remember|\*\*Interactive|\Z)', 
             response, re.DOTALL | re.IGNORECASE
@@ -168,39 +244,13 @@ class SentenceExplorerFrame(ctk.CTkFrame):
         if why_match:
             analysis['why_matters'] = why_match.group(1).strip()[:400]
         
-        # ===== 5. PARSE REMEMBER IT (HOOK) =====
+        # Parse Remember hook
         hook_match = re.search(
             r'\*\*Remember it:\*\*(.*?)(?=\*\*Interactive|\Z)', 
             response, re.DOTALL | re.IGNORECASE
         )
         if hook_match:
             analysis['remember_hook'] = hook_match.group(1).strip()[:200]
-        
-        # ===== FALLBACK: If no structured sections found, try to extract from raw response =====
-        if not analysis['translation'] and not analysis['why_matters']:
-            # Try to find Chinese sentence in response
-            chinese_in_response = re.findall(r'[\u4e00-\u9fff]+', response)
-            if chinese_in_response:
-                # Assume first line is translation-related
-                lines = [l.strip() for l in response.split('\n') if l.strip()]
-                for line in lines[:5]:
-                    if len(line) > 10 and line not in sentence:
-                        analysis['translation'] = line[:200]
-                        break
-            
-            if not analysis['why_matters']:
-                # Extract any sentence that seems like insight
-                sentences = re.split(r'[.。!！?？\n]+', response)
-                for sent in sentences:
-                    if len(sent) > 20 and 'meaning' in sent.lower() or 'feels' in sent.lower():
-                        analysis['why_matters'] = sent.strip()[:200]
-                        break
-        
-        # Infer difficulty from keywords count and response length
-        if len(analysis['keywords']) > 3:
-            analysis['difficulty'] = 4
-        elif len(analysis['keywords']) <= 2:
-            analysis['difficulty'] = 2
         
         return analysis
     
@@ -209,6 +259,10 @@ class SentenceExplorerFrame(ctk.CTkFrame):
         if not text:
             self._get_windows().popup_message("Empty Text", "Please paste some Chinese text to analyze.")
             return
+        
+        # Get or create session
+        self.current_session_id = self._get_or_create_session()
+        self._refresh_session_status()
         
         self.process_btn.configure(state="disabled", text="⏳ Analyzing...")
         self.think_component.clear_think()
@@ -220,7 +274,6 @@ class SentenceExplorerFrame(ctk.CTkFrame):
         
         def process():
             sentences = self._split_sentences(text)
-            self.total_sentences = len(sentences)
             all_analyses = []
             difficulty_sum = 0
             
@@ -229,24 +282,23 @@ class SentenceExplorerFrame(ctk.CTkFrame):
             for i, sentence in enumerate(sentences, 1):
                 self._update_status_after(0, f"Analyzing sentence {i}/{len(sentences)}...", "orange")
                 
-                # Use sentence whisper mode with full format request
-                prompt = f"""💫 {sentence}
+                prompt = f"""💫 {sentence}"""
 
-Please analyze this sentence following EXACTLY this format:
+# Please analyze this sentence following EXACTLY this format:
 
-**Key words to know:**
-- **word (pinyin)** - creative insight (5-10 words)
-- **word2 (pinyin2)** - creative insight
+# **Key words to know:**
+# - **word (pinyin)** - creative insight (5-10 words)
+# - **word2 (pinyin2)** - creative insight
 
-**What it says:** [clear English translation]
+# **What it says:** [clear English translation]
 
-**Simplified paraphrase:** [say the same meaning with simpler Chinese]
+# **Simplified paraphrase:** [say the same meaning with simpler Chinese]
 
-**Why it matters:** [one interesting observation, 1-2 sentences]
+# **Why it matters:** [one interesting observation, 1-2 sentences]
 
-**Remember it:** [memory hook using the main word]
+# **Remember it:** [memory hook using the main word]
 
-Keep it warm and concise like Xiao Xi."""
+# Keep it warm and concise like Xiao Xi."""
                 
                 full_response = ""
                 win = self._get_windows()
@@ -257,6 +309,7 @@ Keep it warm and concise like Xiao Xi."""
                         self._after_append_think(thinking_text)
                     else:
                         full_response += chunk
+                print(full_response)  # For debugging
                 
                 analysis = self._parse_ai_response(sentence, full_response, i)
                 all_analyses.append(analysis)
@@ -302,13 +355,94 @@ Keep it warm and concise like Xiao Xi."""
                         insight=kw.get('insight', ''),
                         importance=kw.get('importance', 0.5)
                     )
+                    
+                    # Add word to session
+                    word_id = self.db.get_word_id(kw.get('word', ''))
+                    if word_id and self.current_session_id:
+                        self.db.add_word_to_session(self.current_session_id, word_id)
             
             self.current_content_id = content_id
             self.current_analysis_id = analysis_id
+            self._refresh_session_status()
             self._update_status_after(0, f"✅ Complete! {len(sentences)} sentences, {level} level", "green")
             self._after_enable_button()
         
         threading.Thread(target=process, daemon=True).start()
+    
+    def _show_session_history(self):
+        """Show session history popup."""
+        win = self._get_windows()
+        sessions = self.db.get_all_sessions()
+        
+        if not sessions:
+            win.popup_message("Sessions", "No sessions recorded yet.", parent=self)
+            return
+        
+        popup = ctk.CTkToplevel(self)
+        popup.geometry("700x500")
+        popup.title("Session History")
+        popup.attributes("-topmost", True)
+        
+        ctk.CTkLabel(popup, text="📚 Your Learning Sessions", 
+                     font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
+        
+        list_frame = ctk.CTkScrollableFrame(popup)
+        list_frame.pack(fill="both", expand=True, padx=20, pady=10)
+        
+        for s in sessions:
+            item_frame = ctk.CTkFrame(list_frame)
+            item_frame.pack(fill="x", pady=3)
+            
+            date_str = datetime.fromtimestamp(s['start_time']).strftime('%m-%d %H:%M')
+            type_icon = {"Manhua": "📖", "Song": "🎵", "News": "📰", "Conversation": "💬"}.get(s['session_type'], "📚")
+            status = "🟢" if s['end_time'] == 0 else "🔴"
+            
+            ctk.CTkLabel(item_frame, text=f"{status} {type_icon} {s['session_type']}", 
+                         font=ctk.CTkFont(weight="bold"), width=120).pack(side="left", padx=5)
+            ctk.CTkLabel(item_frame, text=s['source_name'][:30] if s['source_name'] else "Untitled", 
+                         width=150).pack(side="left", padx=5)
+            ctk.CTkLabel(item_frame, text=f"{s['word_count']} words", width=80).pack(side="left", padx=5)
+            ctk.CTkLabel(item_frame, text=date_str, width=100, text_color="gray").pack(side="left", padx=5)
+            
+            def view(sid=s['session_id']):
+                self._view_session_details(sid)
+                popup.destroy()
+            ctk.CTkButton(item_frame, text="View", width=60, command=view).pack(side="right", padx=5)
+    
+    def _view_session_details(self, session_id: str):
+        """Show detailed view of a session with all words."""
+        win = self._get_windows()
+        words = self.db.get_session_words(session_id)
+        
+        popup = ctk.CTkToplevel(self)
+        popup.geometry("600x500")
+        popup.title(f"Session Details")
+        popup.attributes("-topmost", True)
+        
+        ctk.CTkLabel(popup, text=f"📚 Session: {session_id}", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=10)
+        
+        if words:
+            list_frame = ctk.CTkScrollableFrame(popup)
+            list_frame.pack(fill="both", expand=True, padx=20, pady=10)
+            
+            for w in words:
+                word_frame = ctk.CTkFrame(list_frame)
+                word_frame.pack(fill="x", pady=2)
+                ctk.CTkLabel(word_frame, text=w['word'], font=ctk.CTkFont(weight="bold"), width=120).pack(side="left", padx=5)
+                ctk.CTkLabel(word_frame, text=w['translation'][:50], width=300).pack(side="left", padx=5)
+            
+            # Find related sessions
+            related = self.db.find_related_sessions(session_id)
+            if related:
+                ctk.CTkLabel(popup, text="🔗 Related Sessions (based on shared words):", 
+                             font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(10,0))
+                
+                for r in related:
+                    relate_frame = ctk.CTkFrame(popup, fg_color=("gray85", "gray25"))
+                    relate_frame.pack(fill="x", padx=20, pady=2)
+                    ctk.CTkLabel(relate_frame, text=f"{r['session_type']}: {r['session_id']} ({r['common_words']} shared words)").pack(side="left", padx=10)
+        else:
+            ctk.CTkLabel(popup, text="No words in this session yet.").pack(pady=20)
     
     def _create_sentence_card(self, sentence_data: Dict, index: int):
         """Create a card showing all AI fields."""

@@ -240,10 +240,13 @@ class IntegratedApp:
             # Start pre-loading in the background on startup
             threading.Thread(target=lambda: self.ai.manage_model("load"), daemon=True).start()
             
-            # Pass the AI client so the UI can trigger unloads
+            # Pass the AI client and database so the UI can manage sessions
+            if self.database is None:
+                self.database = self.db_cls(self.db_path)
             self.control_panel = ControlPanel(
-                app_callback=self.launch_vocab_app, 
-                ai_client=self.ai
+                app_callback=self.launch_vocab_app,
+                ai_client=self.ai,
+                db=self.database
             )
             # Set the callback for generating explanations when clipboard is clicked
             self.control_panel.generate_callback = self._generate_for_word
