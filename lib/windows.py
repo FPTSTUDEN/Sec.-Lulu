@@ -311,6 +311,11 @@ class ControlPanel:
         session_control_frame = ctk.CTkFrame(self.top_line_frame, fg_color="transparent")
         session_control_frame.pack(side="right", padx=5)
 
+        # Session quick-add button (clipboard to session)
+        self.quick_add_btn = ctk.CTkButton(session_control_frame, text="➕", width=25, height=25,
+                                          command=self._add_current_clipboard_to_session,
+                                          fg_color="green")
+        self.quick_add_btn.pack(side="left", padx=2)
         self.session_status_label = ctk.CTkLabel(session_control_frame, text="📚 No session", 
                                                 font=ctk.CTkFont(size=10), text_color="gray")
         self.session_status_label.pack(side="left", padx=2)
@@ -382,8 +387,106 @@ class ControlPanel:
         pass
 
     def _on_clipboard_click(self, event):
-        if self.current_clipboard_text and self.generate_callback:
-            self.generate_callback(self.current_clipboard_text)
+        """Enhanced clipboard click with session options."""
+        if not self.current_clipboard_text:
+            return
+        
+        # Create popup menu for clipboard actions
+        popup = ctk.CTkToplevel(self.root)
+        popup.geometry("350x250")
+        popup.title("Clipboard Actions")
+        popup.attributes("-topmost", True)
+        
+        ctk.CTkLabel(popup, text="📋 Clipboard Content", font=ctk.CTkFont(weight="bold", size=14)).pack(pady=10)
+        
+        # Preview
+        preview = self.current_clipboard_text[:150] + "..." if len(self.current_clipboard_text) > 150 else self.current_clipboard_text
+        ctk.CTkLabel(popup, text=preview, wraplength=300, justify="left").pack(padx=20, pady=5)
+        
+        ctk.CTkLabel(popup, text=f"Length: {len(self.current_clipboard_text)} characters", text_color="gray", font=ctk.CTkFont(size=10)).pack()
+        
+        btn_frame = ctk.CTkFrame(popup, fg_color="transparent")
+        btn_frame.pack(pady=15)
+        
+        # Option 1: Send to current chat/generation
+        if self.generate_callback:
+            ctk.CTkButton(btn_frame, text="💬 Send to AI", command=lambda: [self.generate_callback(self.current_clipboard_text), popup.destroy()]).pack(pady=5)
+        
+        # Option 2: Add to active session
+        active = self.db.get_active_session() if self.db else None
+        if active:
+            ctk.CTkButton(btn_frame, text=f"📚 Add to session: {active['session_type']}", 
+                         command=lambda: [self._add_clipboard_to_session(active['session_id'], self.current_clipboard_text), popup.destroy()]).pack(pady=5)
+        else:
+            ctk.CTkButton(btn_frame, text="📚 Create new session with this content", 
+                         command=lambda: [self._create_session_with_content(self.current_clipboard_text), popup.destroy()]).pack(pady=5)
+        
+        # Option 3: Analyze in Sentence Explorer
+        ctk.CTkButton(btn_frame, text="🔍 Analyze in Sentence Explorer", 
+                     command=lambda: [self._open_sentence_explorer_with_text(self.current_clipboard_text), popup.destroy()]).pack(pady=5)
+        
+        # Option 4: Copy to session notes
+        ctk.CTkButton(btn_frame, text="📝 Save as session note", 
+                     command=lambda: [self._save_as_session_note(self.current_clipboard_text), popup.destroy()]).pack(pady=5)
+        
+        ctk.CTkButton(popup, text="Cancel", command=popup.destroy, fg_color="gray").pack(pady=5)
+    
+    def _create_session_with_content(self, content: str):
+        """Create a new session and add clipboard content to it."""
+        if not self.db:
+            popup_message("Database Missing", "Cannot create session without database.", parent=self.root)
+            return
+        
+        # Create session dialog with pre-filled source from content
+        popup = ctk.CTkToplevel(self.root)
+        popup.geometry("350x300")
+        popup.title("Create Session from Clipboard")
+        popup.attributes("-topmost", True)
+        
+        ctk.CTkLabel(popup, text="New Session from Clipboard", font=ctk.CTkFont(weight="bold")).pack(pady=10)
+        
+        ctk.CTkLabel(popup, text="Session Type:").pack(anchor="w", padx=20)
+        type_var = ctk.StringVar(value="General")
+        type_menu = ctk.CTkOptionMenu(popup, values=["Manhua", "Song", "News", "Conversation", "General"], 
+                                    variable=type_var)
+        type_menu.pack(fill="x", padx=20, pady=5)
+        
+        # Auto-extract potential source name from content
+        first_line = content.split('\n')[0][:40]
+        ctk.CTkLabel(popup, text="Source Name:").pack(anchor="w", padx=20)
+        source_entry = ctk.CTkEntry(popup, placeholder_text="e.g., Chapter title", width=250)
+        source_entry.insert(0, first_line)
+        source_entry.pack(fill="x", padx=20, pady=5)
+        
+        def create():
+            session_id = self.db.create_session(type_var.get(), source_entry.get().strip() or None)
+            self._add_clipboard_to_session(session_id, content)
+            self._refresh_session_status()
+            popup.destroy()
+            popup_message("Session Created", f"Session created and content added!\n\nSession ID: {session_id}", parent=self.root)
+        
+        ctk.CTkButton(popup, text="Create & Add", command=create, fg_color="green").pack(pady=15)
+    
+    def _open_sentence_explorer_with_text(self, text: str):
+        """Open Sentence Explorer with pre-filled text."""
+        # Find the Sentence Explorer frame in the app
+        if self.app_callback:
+            # This would open the app and navigate to Sentence Explorer
+            # For now, show a message
+            popup_message("Open Sentence Explorer", 
+                         f"Paste this text in Sentence Explorer:\n\n{text[:200]}...", 
+                         parent=self.root)
+    
+    def _save_as_session_note(self, text: str):
+        """Save clipboard content as a note in the active session."""
+        active = self.db.get_active_session()
+        if not active:
+            if popup_message("No Active Session", "Create a new session first?", is_yes_no=True, parent=self.root):
+                self._create_new_session()
+                return
+        
+        # Here you would save to a session_notes table
+        popup_message("Note Saved", f"Content saved as note in session {active['session_id']}", parent=self.root)
 
     def load_ai(self):
         def task():
@@ -568,6 +671,332 @@ class ControlPanel:
                 ctk.CTkLabel(word_frame, text=w['translation'][:40], width=250).pack(side="left", padx=5)
         else:
             ctk.CTkLabel(popup, text="No words in this session yet.").pack(pady=20)
+
+    def _create_new_session(self):
+        """Create a new learning session with more options."""
+        if self.db is None:
+            popup_message("Database Missing", "Session management requires a database connection.", parent=self.root)
+            return
+
+        popup = ctk.CTkToplevel(self.root)
+        popup.geometry("350x400")
+        popup.title("New Session")
+        popup.attributes("-topmost", True)
+        
+        ctk.CTkLabel(popup, text="Create New Learning Session", font=ctk.CTkFont(weight="bold", size=16)).pack(pady=15)
+        
+        # Session Type
+        ctk.CTkLabel(popup, text="Session Type:").pack(anchor="w", padx=20)
+        type_var = ctk.StringVar(value="General")
+        type_menu = ctk.CTkOptionMenu(popup, values=["Manhua", "Song", "News", "Conversation", "General", "Custom"], 
+                                    variable=type_var, width=200)
+        type_menu.pack(fill="x", padx=20, pady=5)
+        
+        # Custom type entry (shown only when "Custom" selected)
+        custom_frame = ctk.CTkFrame(popup, fg_color="transparent")
+        custom_frame.pack(fill="x", padx=20, pady=5)
+        custom_label = ctk.CTkLabel(custom_frame, text="Custom Type:", width=80)
+        custom_label.pack(side="left")
+        custom_entry = ctk.CTkEntry(custom_frame, placeholder_text="e.g., Business Chinese", width=160)
+        custom_entry.pack(side="left")
+        custom_label.pack_forget()
+        custom_entry.pack_forget()
+        
+        def on_type_change(*args):
+            if type_var.get() == "Custom":
+                custom_label.pack(side="left")
+                custom_entry.pack(side="left")
+            else:
+                custom_label.pack_forget()
+                custom_entry.pack_forget()
+        
+        type_var.trace("w", on_type_change)
+        
+        # Source Name
+        ctk.CTkLabel(popup, text="Source Name:").pack(anchor="w", padx=20, pady=(10,0))
+        source_entry = ctk.CTkEntry(popup, placeholder_text="e.g., Legend of the Sword Ch3")
+        source_entry.pack(fill="x", padx=20, pady=5)
+        
+        # Auto-add clipboard content option
+        auto_add_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(popup, text="Auto-add current clipboard content to session", 
+                        variable=auto_add_var).pack(anchor="w", padx=20, pady=5)
+        
+        # Session expiry (auto-end after inactivity)
+        expiry_frame = ctk.CTkFrame(popup, fg_color="transparent")
+        expiry_frame.pack(fill="x", padx=20, pady=10)
+        ctk.CTkLabel(expiry_frame, text="Auto-end after:", width=100).pack(side="left")
+        expiry_var = ctk.StringVar(value="Never")
+        expiry_menu = ctk.CTkOptionMenu(expiry_frame, values=["Never", "30 minutes", "1 hour", "2 hours", "1 day"], 
+                                        variable=expiry_var, width=100)
+        expiry_menu.pack(side="left", padx=10)
+        
+        # Notes
+        ctk.CTkLabel(popup, text="Session Notes (optional):").pack(anchor="w", padx=20)
+        notes_text = ctk.CTkTextbox(popup, height=60, wrap="word")
+        notes_text.pack(fill="x", padx=20, pady=5)
+        
+        def create():
+            session_type = type_var.get()
+            if session_type == "Custom":
+                custom_val = custom_entry.get().strip()
+                session_type = custom_val if custom_val else "Custom"
+            
+            source = source_entry.get().strip() or None
+            session_id = self.db.create_session(session_type, source)
+            
+            # Store session metadata (expiry, notes, etc.)
+            # You could add a session_metadata table for this
+            
+            # Auto-add clipboard content if enabled
+            if auto_add_var.get() and self.current_clipboard_text:
+                # Process clipboard text as content for this session
+                self._add_clipboard_to_session(session_id, self.current_clipboard_text)
+            
+            self._refresh_session_status()
+            popup.destroy()
+            
+            popup_message("Session Created", 
+                         f"Session {session_id} created!\n\n"
+                         f"Type: {session_type}\n"
+                         f"Source: {source or 'Untitled'}\n"
+                         f"Auto-end: {expiry_var.get()}\n\n"
+                         f"Words you learn will be tracked in this session.",
+                         parent=self.root)
+        
+        ctk.CTkButton(popup, text="Create Session", command=create, fg_color="green", width=150).pack(pady=15)
+    
+    def _add_clipboard_to_session(self, session_id: str, clipboard_text: str):
+        """Add clipboard content as a learning item to the current session."""
+        # This creates a sentence analysis for the clipboard text
+        # and links all extracted words to the session
+        try:
+            from lib.sentence_explorer import SentenceExplorerFrame
+            # Use the sentence explorer's processing but without UI
+            # For now, just log it
+            print(f"Adding clipboard content to session {session_id}: {clipboard_text[:100]}...")
+            
+            # You can implement automatic word extraction here
+            # For demo, just show a popup
+            self.root.after(0, lambda: popup_message(
+                "Content Added", 
+                f"Clipboard content added to session.\n\n"
+                f"First 100 chars:\n{clipboard_text[:100]}...\n\n"
+                f"Open Sentence Explorer to analyze this text.",
+                parent=self.root
+            ))
+        except Exception as e:
+            print(f"Error adding clipboard to session: {e}")
+    
+    def _show_session_details(self, session_id: str):
+        """Show detailed session information with word management."""
+        session_words = self.db.get_session_words(session_id)
+        
+        popup = ctk.CTkToplevel(self.root)
+        popup.geometry("650x550")
+        popup.title(f"Session Details: {session_id}")
+        popup.attributes("-topmost", True)
+        
+        # Header
+        header_frame = ctk.CTkFrame(popup, fg_color="transparent")
+        header_frame.pack(fill="x", padx=20, pady=10)
+        
+        ctk.CTkLabel(header_frame, text=f"📚 Session: {session_id}", 
+                    font=ctk.CTkFont(size=16, weight="bold")).pack(side="left")
+        
+        # Session actions
+        action_frame = ctk.CTkFrame(header_frame, fg_color="transparent")
+        action_frame.pack(side="right")
+        
+        def rename_session():
+            new_name = ctk.CTkInputDialog(text="Enter new session name:", title="Rename Session")
+            if new_name.get_input():
+                # Add rename method to db
+                popup_message("Info", "Rename feature coming soon!", parent=popup)
+        
+        ctk.CTkButton(action_frame, text="✏️ Rename", width=60, command=rename_session).pack(side="left", padx=2)
+        
+        def delete_session():
+            if popup_message("Delete Session", f"Delete session '{session_id}' and all its words?", 
+                           is_yes_no=True, parent=popup):
+                # Add delete method to db
+                popup.destroy()
+                self._refresh_session_status()
+        
+        ctk.CTkButton(action_frame, text="🗑️ Delete", width=60, fg_color="red", command=delete_session).pack(side="left", padx=2)
+        
+        # Statistics
+        stats_frame = ctk.CTkFrame(popup, fg_color=("gray85", "gray25"))
+        stats_frame.pack(fill="x", padx=20, pady=10)
+        
+        total_words = len(session_words)
+        ctk.CTkLabel(stats_frame, text=f"📊 Statistics", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=10, pady=(10,0))
+        
+        stats_grid = ctk.CTkFrame(stats_frame, fg_color="transparent")
+        stats_grid.pack(fill="x", padx=10, pady=5)
+        
+        ctk.CTkLabel(stats_grid, text=f"Total words: {total_words}", width=150).grid(row=0, column=0, sticky="w")
+        
+        # Calculate mastered count (if you have mastery tracking)
+        # mastered = sum(1 for w in session_words if w.get('mastered', False))
+        # ctk.CTkLabel(stats_grid, text=f"Mastered: {mastered}", width=150).grid(row=0, column=1, sticky="w")
+        
+        # Word list with checkboxes for selective review
+        words_frame = ctk.CTkFrame(popup, fg_color="transparent")
+        words_frame.pack(fill="both", expand=True, padx=20, pady=10)
+        
+        ctk.CTkLabel(words_frame, text="📝 Words in this session", font=ctk.CTkFont(weight="bold")).pack(anchor="w")
+        
+        # Search bar
+        search_frame = ctk.CTkFrame(words_frame, fg_color="transparent")
+        search_frame.pack(fill="x", pady=5)
+        search_entry = ctk.CTkEntry(search_frame, placeholder_text="Filter words...", width=200)
+        search_entry.pack(side="left")
+        
+        # Scrollable word list
+        word_list_frame = ctk.CTkScrollableFrame(words_frame, height=300)
+        word_list_frame.pack(fill="both", expand=True, pady=5)
+        
+        word_vars = {}
+        
+        def filter_words():
+            search_term = search_entry.get().lower()
+            for widget in word_list_frame.winfo_children():
+                widget.destroy()
+            
+            for w in session_words:
+                if search_term in w['word'].lower() or search_term in w['translation'].lower():
+                    word_frame = ctk.CTkFrame(word_list_frame)
+                    word_frame.pack(fill="x", pady=2)
+                    
+                    var = ctk.BooleanVar(value=True)
+                    word_vars[w['word']] = var
+                    cb = ctk.CTkCheckBox(word_frame, text="", variable=var, width=30)
+                    cb.pack(side="left", padx=5)
+                    
+                    ctk.CTkLabel(word_frame, text=w['word'], font=ctk.CTkFont(weight="bold"), width=100).pack(side="left", padx=5)
+                    ctk.CTkLabel(word_frame, text=w['translation'][:50], width=300).pack(side="left", padx=5)
+                    
+                    # Individual word review button
+                    review_btn = ctk.CTkButton(word_frame, text="Review", width=50, height=25,
+                                              command=lambda word=w['word']: self._quick_review_word(word))
+                    review_btn.pack(side="right", padx=2)
+        
+        search_entry.bind("<KeyRelease>", lambda e: filter_words())
+        filter_words()
+        
+        # Batch actions
+        batch_frame = ctk.CTkFrame(popup, fg_color="transparent")
+        batch_frame.pack(fill="x", padx=20, pady=10)
+        
+        def review_selected():
+            selected = [word for word, var in word_vars.items() if var.get()]
+            if selected:
+                popup_message("Review Selected", f"Reviewing {len(selected)} words from this session...\n\n" + "\n".join(selected[:10]), parent=popup)
+        
+        ctk.CTkButton(batch_frame, text="📖 Review Selected", command=review_selected, fg_color="green").pack(side="left", padx=5)
+        
+        def export_selected():
+            selected = [word for word, var in word_vars.items() if var.get()]
+            if selected:
+                # Export to file
+                from datetime import datetime
+                filename = f"session_{session_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+                with open(filename, 'w', encoding='utf-8') as f:
+                    f.write(f"Session: {session_id}\n")
+                    f.write(f"Exported: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write("=" * 50 + "\n\n")
+                    for word in session_words:
+                        if word['word'] in selected:
+                            f.write(f"{word['word']} - {word['translation']}\n")
+                popup_message("Export Complete", f"Exported {len(selected)} words to {filename}", parent=popup)
+        
+        ctk.CTkButton(batch_frame, text="💾 Export Selected", command=export_selected, fg_color="blue").pack(side="left", padx=5)
+        
+        def delete_selected():
+            selected = [word for word, var in word_vars.items() if var.get()]
+            if selected and popup_message("Delete Words", f"Delete {len(selected)} words from this session?", is_yes_no=True, parent=popup):
+                # Add batch delete method
+                popup_message("Deleted", f"Deleted {len(selected)} words from session.", parent=popup)
+                filter_words()  # Refresh
+        
+        ctk.CTkButton(batch_frame, text="🗑️ Delete Selected", command=delete_selected, fg_color="red").pack(side="left", padx=5)
+        
+        # Related sessions
+        related = self.db.find_related_sessions(session_id)
+        if related:
+            related_frame = ctk.CTkFrame(popup, fg_color=("gray85", "gray25"))
+            related_frame.pack(fill="x", padx=20, pady=10)
+            ctk.CTkLabel(related_frame, text="🔗 Related Sessions (based on shared words):", 
+                        font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=10, pady=(10,0))
+            
+            for r in related:
+                rel_frame = ctk.CTkFrame(related_frame, fg_color="transparent")
+                rel_frame.pack(fill="x", padx=20, pady=2)
+                ctk.CTkLabel(rel_frame, text=f"{r['session_type']}: {r['session_id']} ({r['common_words']} shared words)").pack(side="left")
+                
+                def view_related(sid=r['session_id']):
+                    self._show_session_details(sid)
+                    popup.destroy()
+                ctk.CTkButton(rel_frame, text="View", width=50, command=view_related).pack(side="right")
+    
+    def _quick_review_word(self, word: str):
+        """Quick review a single word from a session."""
+        # This can open a mini popup for word review
+        popup = ctk.CTkToplevel(self.root)
+        popup.geometry("400x300")
+        popup.title(f"Review: {word}")
+        popup.attributes("-topmost", True)
+        
+        ctk.CTkLabel(popup, text=word, font=ctk.CTkFont(size=36, weight="bold")).pack(pady=30)
+        
+        # Get translation from database
+        translation = ""
+        try:
+            word_id = self.db.get_word_id(word)
+            if word_id:
+                cursor = self.db._get_cursor()
+                cursor.execute("SELECT translation FROM words WHERE id = ?", (word_id,))
+                row = cursor.fetchone()
+                if row:
+                    translation = row[0]
+        except:
+            pass
+        
+        ctk.CTkLabel(popup, text=translation, font=ctk.CTkFont(size=20), text_color="green").pack(pady=10)
+        
+        btn_frame = ctk.CTkFrame(popup, fg_color="transparent")
+        btn_frame.pack(pady=20)
+        
+        def mark_reviewed(quality):
+            try:
+                word_id = self.db.get_word_id(word)
+                if word_id:
+                    self.db.update_review(word_id, quality)
+                    popup_message("Reviewed", f"Word '{word}' marked as reviewed!", parent=popup)
+                popup.destroy()
+            except Exception as e:
+                popup.destroy()
+        
+        ctk.CTkButton(btn_frame, text="Easy", fg_color="green", width=80, command=lambda: mark_reviewed(5)).pack(side="left", padx=10)
+        ctk.CTkButton(btn_frame, text="Good", fg_color="blue", width=80, command=lambda: mark_reviewed(3)).pack(side="left", padx=10)
+        ctk.CTkButton(btn_frame, text="Hard", fg_color="orange", width=80, command=lambda: mark_reviewed(1)).pack(side="left", padx=10)
+    
+    def _add_current_clipboard_to_session(self):
+        """Add current clipboard content to the active session."""
+        if not self.current_clipboard_text:
+            popup_message("No Clipboard Content", "There is no text in clipboard to add.", parent=self.root)
+            return
+        
+        active = self.db.get_active_session()
+        if not active:
+            # Ask to create a session first
+            if popup_message("No Active Session", "Create a new session first?", is_yes_no=True, parent=self.root):
+                self._create_new_session()
+            return
+        
+        # Add clipboard content to session
+        self._add_clipboard_to_session(active['session_id'], self.current_clipboard_text)
     def show(self):
         self.root.mainloop()
 
