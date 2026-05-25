@@ -277,8 +277,17 @@ class PopupSaveManager:
         suggested = self.extract_translation(explanation_text)
         
         # Prompt user to confirm/edit translation
+        # Find a valid parent widget for the dialog
+        parent_for_dialog = self.parent_widget
+        if not parent_for_dialog:
+            # Try to get root from tkinter's current context
+            try:
+                parent_for_dialog = tk.Tk._root
+            except:
+                parent_for_dialog = None
+        
         dialog = TranslationDialog(
-            self.parent_widget or tk._default_root,
+            parent_for_dialog or tk.Tk(),
             word,
             suggested
         )
@@ -857,8 +866,13 @@ class ControlPanel:
 
 def popup_message(title, message, is_yes_no=False, parent=None):
     """Show popup message. Returns bool if is_yes_no=True."""
-    root = parent or tk._default_root
+    root = parent
     created_root = False
+    if root is None:
+        try:
+            root = tk.Tk._root
+        except:
+            pass
     if root is None:
         root = tk.Tk()
         root.withdraw()
@@ -907,6 +921,9 @@ class Long_message_popup:
         self.session_id = session_id
         self.parent_node_id = parent_node_id
         self.current_node_id = None
+        self.generate_explanation_callback = generate_explanation_callback
+        self.word_index = word_index
+        self.char_def_index = char_def_index
         self.generate_explanation_callback = generate_explanation_callback
 
         customtkinter.CTkLabel(self.long_popup, text=title, font=("Mengshen-Handwritten", 24, "bold")).pack(pady=(5, 5))
@@ -1006,7 +1023,7 @@ class Long_message_popup:
         return node_id
 
     def _view_chain(self):
-        """Open chain viewer for this content"""
+        """Open chain viewer for this content with full feature propagation"""
         if not self.data_service or not self.data_service.db:
             return
         
@@ -1016,8 +1033,16 @@ class Long_message_popup:
         
         if self.current_node_id:
             from lib.chain_viewer import ChainViewer
-            viewer = ChainViewer(self.long_popup, self.data_service.db, self.current_node_id, 
-                                f"Chain for: {self.long_popup.title()}")
+            viewer = ChainViewer(
+                self.long_popup, 
+                self.data_service.db, 
+                self.current_node_id,
+                f"Chain for: {self.long_popup.title()}",
+                data_service=self.data_service,
+                generate_callback=self.generate_explanation_callback,
+                word_index=self.word_index,
+                char_def_index=self.char_def_index
+            )
             viewer.focus()
     def show(self):
         self.long_popup.focus_set()
