@@ -277,17 +277,8 @@ class PopupSaveManager:
         suggested = self.extract_translation(explanation_text)
         
         # Prompt user to confirm/edit translation
-        # Find a valid parent widget for the dialog
-        parent_for_dialog = self.parent_widget
-        if not parent_for_dialog:
-            # Try to get root from tkinter's current context
-            try:
-                parent_for_dialog = tk.Tk._root
-            except:
-                parent_for_dialog = None
-        
         dialog = TranslationDialog(
-            parent_for_dialog or tk.Tk(),
+            self.parent_widget or tk._default_root,
             word,
             suggested
         )
@@ -453,23 +444,25 @@ class LookupPanel(customtkinter.CTkFrame):
         
         def on_select():
             # Create a content node for this word lookup if service available
+            node_for_chain = None
             if service and service.db and (parent_node_id or self.parent_node_id):
-                node_id = service.save_explanation_as_content(
+                node_for_chain = service.save_explanation_as_content(
                     title=f"Lookup: {word}",
                     content=word,
                     session_id=session_id,
                     parent_node_id=parent_node_id or self.parent_node_id
                 )
                 # Record word occurrence
-                if node_id:
-                    service.record_word_occurrence(word, node_id, 0, len(word))
+                if node_for_chain:
+                    service.record_word_occurrence(word, node_for_chain, 0, len(word))
             
-            # If generate_explanation_callback is available, use it for full AI response with streaming & save
-            # This passes the selected mode so chained popups use the correct response style
+            # If generate_explanation_callback is available, use it for full AI response
+            # Pass the selected mode to the callback
             if self.generate_explanation_callback:
+                # Pass both the word and the selected mode
                 self.generate_explanation_callback(word, mode_var.get())
             else:
-                # Fallback to static word click for backwards compatibility
+                # Fallback to static word click
                 self.word_click_callback(word, mode_var.get())
             
             popup.destroy()
@@ -482,7 +475,6 @@ class LookupPanel(customtkinter.CTkFrame):
             chain_info = ctk.CTkLabel(popup, text=f"🔗 This lookup will be linked to existing content", 
                                     font=ctk.CTkFont(size=10), text_color="green")
             chain_info.pack(pady=5)
-
 class ThinkBox(customtkinter.CTkFrame):
     """Reusable collapsible thinking box component."""
     def __init__(self, master, **kwargs):
@@ -866,13 +858,8 @@ class ControlPanel:
 
 def popup_message(title, message, is_yes_no=False, parent=None):
     """Show popup message. Returns bool if is_yes_no=True."""
-    root = parent
+    root = parent or tk._default_root
     created_root = False
-    if root is None:
-        try:
-            root = tk.Tk._root
-        except:
-            pass
     if root is None:
         root = tk.Tk()
         root.withdraw()
@@ -921,9 +908,6 @@ class Long_message_popup:
         self.session_id = session_id
         self.parent_node_id = parent_node_id
         self.current_node_id = None
-        self.generate_explanation_callback = generate_explanation_callback
-        self.word_index = word_index
-        self.char_def_index = char_def_index
         self.generate_explanation_callback = generate_explanation_callback
 
         customtkinter.CTkLabel(self.long_popup, text=title, font=("Mengshen-Handwritten", 24, "bold")).pack(pady=(5, 5))
@@ -1023,7 +1007,7 @@ class Long_message_popup:
         return node_id
 
     def _view_chain(self):
-        """Open chain viewer for this content with full feature propagation"""
+        """Open chain viewer for this content"""
         if not self.data_service or not self.data_service.db:
             return
         
@@ -1033,16 +1017,8 @@ class Long_message_popup:
         
         if self.current_node_id:
             from lib.chain_viewer import ChainViewer
-            viewer = ChainViewer(
-                self.long_popup, 
-                self.data_service.db, 
-                self.current_node_id,
-                f"Chain for: {self.long_popup.title()}",
-                data_service=self.data_service,
-                generate_callback=self.generate_explanation_callback,
-                word_index=self.word_index,
-                char_def_index=self.char_def_index
-            )
+            viewer = ChainViewer(self.long_popup, self.data_service.db, self.current_node_id, 
+                                f"Chain for: {self.long_popup.title()}")
             viewer.focus()
     def show(self):
         self.long_popup.focus_set()

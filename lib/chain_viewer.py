@@ -11,28 +11,21 @@ class ChainViewer(ctk.CTkToplevel):
     Shows both backward chain (ancestors) and forward chain (children).
     """
     
-    def __init__(self, parent, db, node_id: int, title: str = "Content Chain",
-                 data_service=None, generate_callback=None, word_index=None, char_def_index=None):
+    def __init__(self, parent, db, node_id: int, title: str = "Content Chain"):
         super().__init__(parent)
         self.db = db
         self.node_id = node_id
-        self.data_service = data_service
-        self.generate_callback = generate_callback
-        self.word_index = word_index or {}
-        self.char_def_index = char_def_index or {}
         self.title(title)
         self.geometry("800x600")
         self.attributes("-topmost", True)
         
-        # Data attributes (will be populated in background thread)
-        self.backward_chain = None
+        # Store references to widgets - RENAME TO AVOID CONFLICT
+        self.backward_chain_data = []  # Changed from self.backward_chain
         self.current_node = None
-        self.children = None
+        self.child_nodes = []  # Changed from self.children
         
         self._setup_ui()
-        # Load chain data in background thread to avoid freezing UI
-        import threading
-        threading.Thread(target=self._load_chain_background, daemon=True).start()
+        self._load_chain()
     
     def _setup_ui(self):
         # Main frame
@@ -47,6 +40,7 @@ class ChainViewer(ctk.CTkToplevel):
         tab_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
         tab_frame.pack(fill="x", pady=5)
         
+        # Store button references
         self.backward_btn = ctk.CTkButton(tab_frame, text="⬅️ Backward Chain (Origin)",
                                           command=lambda: self._show_tab("backward"),
                                           fg_color="blue", width=150)
@@ -76,9 +70,13 @@ class ChainViewer(ctk.CTkToplevel):
         self.forward_btn.configure(fg_color="blue" if tab_name == "forward" else "gray")
         self.related_btn.configure(fg_color="blue" if tab_name == "related" else "gray")
         
-        # Clear content
-        for widget in self.content_frame.winfo_children():
-            widget.destroy()
+        # Clear content - MORE ROBUST CLEANUP
+        widgets_to_destroy = list(self.content_frame.winfo_children())
+        for widget in widgets_to_destroy:
+            try:
+                widget.destroy()
+            except Exception as e:
+                print(f"Error destroying widget: {e}")
         
         if tab_name == "backward":
             self._show_backward_chain()
@@ -87,63 +85,60 @@ class ChainViewer(ctk.CTkToplevel):
         elif tab_name == "related":
             self._show_related_words()
     
-    def _load_chain_background(self):
-        """Load chain data from database in background thread"""
+    def _load_chain(self):
+        """Load chain data from database"""
         try:
-            self.backward_chain = self.db.get_content_chain(self.node_id)
+            self.backward_chain_data = self.db.get_content_chain(self.node_id)
             self.current_node = self.db.get_content_node(self.node_id)
-            self.children = self.db.get_node_children(self.node_id)
+            self.child_nodes = self.db.get_node_children(self.node_id)
             
-            # Schedule UI update on main thread
-            self.after(0, self._load_chain_complete)
+            # Update status
+            node_type = self.current_node['node_type'] if self.current_node else 'Unknown'
+            self.status_label.configure(text=f"Node ID: {self.node_id} | Type: {node_type}")
+            
+            # Show backward chain by default
+            self._show_backward_chain()
         except Exception as e:
-            print(f"Error loading chain data: {e}")
-            self.after(0, lambda: self.status_label.configure(text=f"Error loading chain: {e}"))
-    
-    def _load_chain_complete(self):
-        """Complete chain loading on main thread after data is fetched"""
-        # Update status
-        self.status_label.configure(text=f"Node ID: {self.node_id} | Type: {self.current_node['node_type'] if self.current_node else 'Unknown'}")
-        
-        # Show backward chain by default
-        self._show_backward_chain()
+            self.status_label.configure(text=f"Error loading chain: {e}", text_color="red")
     
     def _show_backward_chain(self):
         """Show the chain of ancestors (where this content came from)"""
-        if not self.backward_chain:
+        if not self.backward_chain_data or len(self.backward_chain_data) == 0:
             ctk.CTkLabel(self.content_frame, text="No backward chain found.", 
                          text_color="gray").pack(pady=20)
             return
         
         # Show current node first (as the focus)
-        self._add_node_card(self.current_node, is_current=True)
+        if self.current_node:
+            self._add_node_card(self.current_node, is_current=True)
         
-        # Show "came from" arrow
-        if len(self.backward_chain) > 1:
+        # Show "came from" arrow if there are ancestors
+        if len(self.backward_chain_data) > 1:
             arrow_label = ctk.CTkLabel(self.content_frame, text="⬇️ Came from ⬇️", 
                                         font=ctk.CTkFont(size=12), text_color="orange")
             arrow_label.pack(pady=5)
         
         # Show ancestors in reverse order (oldest to newest)
-        for node in reversed(self.backward_chain[:-1]):  # Exclude current node
+        # Exclude current node (last in chain)
+        ancestors = self.backward_chain_data[:-1] if len(self.backward_chain_data) > 1 else []
+        for i, node in enumerate(reversed(ancestors)):
             self._add_node_card(node, is_current=False)
             
-            # Add arrow to next
-            if node != self.backward_chain[0]:
+            # Add arrow between ancestors (except after last one)
+            if i < len(ancestors) - 1:
                 arrow = ctk.CTkLabel(self.content_frame, text="↓", font=ctk.CTkFont(size=10))
                 arrow.pack(pady=2)
     
     def _show_forward_chain(self):
         """Show what this node led to (children)"""
-        children = self.db.get_node_children(self.node_id)
-        
-        if not children:
+        if not self.child_nodes:
             ctk.CTkLabel(self.content_frame, text="No forward chain found (nothing led from this content).", 
                          text_color="gray").pack(pady=20)
             return
         
         # Show current node
-        self._add_node_card(self.current_node, is_current=True)
+        if self.current_node:
+            self._add_node_card(self.current_node, is_current=True)
         
         # Show arrow
         arrow_label = ctk.CTkLabel(self.content_frame, text="⬇️ Led to ⬇️", 
@@ -151,13 +146,13 @@ class ChainViewer(ctk.CTkToplevel):
         arrow_label.pack(pady=5)
         
         # Show children
-        for child in children:
+        for i, child in enumerate(self.child_nodes):
             child_node = self.db.get_content_node(child['id'])
             if child_node:
                 self._add_node_card(child_node, is_current=False)
                 
-                # Add arrow between children
-                if child != children[-1]:
+                # Add arrow between children (except after last one)
+                if i < len(self.child_nodes) - 1:
                     arrow = ctk.CTkLabel(self.content_frame, text="↓", font=ctk.CTkFont(size=10))
                     arrow.pack(pady=2)
     
@@ -165,10 +160,10 @@ class ChainViewer(ctk.CTkToplevel):
         """Show words related through content chains"""
         # First, get the main word from the current node
         main_word = None
-        if self.current_node and self.current_node['node_type'] == 'word_lookup':
-            main_word = self.current_node.get('title') or self.current_node.get('content')[:20]
+        if self.current_node and self.current_node.get('node_type') == 'word_lookup':
+            main_word = self.current_node.get('title') or self.current_node.get('content', '')[:20]
         
-        if not main_word:
+        if not main_word and self.current_node:
             # Try to extract from content
             content = self.current_node.get('content', '')
             # Look for Chinese words
@@ -202,9 +197,12 @@ class ChainViewer(ctk.CTkToplevel):
     
     def _add_node_card(self, node: Dict, is_current: bool = False):
         """Add a visual card for a content node"""
+        if not node:
+            return
+            
         card = ctk.CTkFrame(self.content_frame, 
-                            fg_color=("blue" if is_current else "gray85", 
-                                     "darkblue" if is_current else "gray25"),
+                            fg_color=("#3a6ea5" if is_current else "gray85", 
+                                     "#1a4a7a" if is_current else "gray25"),
                             corner_radius=10)
         card.pack(fill="x", pady=5, padx=5)
         
@@ -234,9 +232,9 @@ class ChainViewer(ctk.CTkToplevel):
         
         # Content preview
         content = node.get('content', '')
-        if len(content) > 200:
-            content = content[:200] + "..."
         if content:
+            if len(content) > 200:
+                content = content[:200] + "..."
             ctk.CTkLabel(card, text=content, wraplength=600, justify="left", 
                          font=ctk.CTkFont(size=12)).pack(anchor="w", padx=15, pady=5)
         
@@ -245,51 +243,26 @@ class ChainViewer(ctk.CTkToplevel):
         btn_frame.pack(fill="x", padx=10, pady=5)
         
         if node.get('id') != self.node_id:
-            # View Full button - opens content with full features (lookup, save, etc.)
-            view_full_btn = ctk.CTkButton(btn_frame, text="👁️ View Full", width=80, height=25,
-                                          fg_color="green",
-                                          command=lambda nid=node['id']: self._view_full_content(nid))
-            view_full_btn.pack(side="right", padx=2)
-            
-            # View Chain button - navigates to child node's chain
-            view_btn = ctk.CTkButton(btn_frame, text="🔗 View Chain", width=90, height=25,
-                                      fg_color="blue",
+            view_btn = ctk.CTkButton(btn_frame, text="View Chain", width=80, height=25,
                                       command=lambda nid=node['id']: self._open_chain(nid))
             view_btn.pack(side="right", padx=2)
     
     def _open_chain(self, node_id: int):
         """Open chain viewer for another node"""
-        new_viewer = ChainViewer(self, self.db, node_id, f"Content Chain - Node {node_id}",
-                                 data_service=self.data_service,
-                                 generate_callback=self.generate_callback,
-                                 word_index=self.word_index,
-                                 char_def_index=self.char_def_index)
-        new_viewer.focus()
-    
-    def _view_full_content(self, node_id: int):
-        """Open full content in Long_message_popup with all features"""
-        node = self.db.get_content_node(node_id)
-        if not node:
-            return
-        
-        # Import here to avoid circular imports
-        from lib.windows import Long_message_popup
-        
-        popup = Long_message_popup(
-            title=node.get('title', 'Content'),
-            message=node.get('content', ''),
-            master=self,
-            display_image=False,
-            word_index=self.word_index,
-            char_def_index=self.char_def_index,
-            data_service=self.data_service,
-            generate_explanation_callback=self.generate_callback,
-            parent_node_id=node_id
-        )
-        popup.show()
+        try:
+            new_viewer = ChainViewer(self, self.db, node_id, f"Content Chain - Node {node_id}")
+            new_viewer.focus()
+        except Exception as e:
+            print(f"Error opening chain viewer: {e}")
     
     def _lookup_word(self, word: str):
         """Trigger word lookup in main app"""
-        # This should communicate back to main app
-        # For now, just show a message
-        self.status_label.configure(text=f"Looking up: {word} (integration with main app needed)")
+        self.status_label.configure(text=f"Looking up: {word}")
+        print(f"Lookup word: {word}")
+    
+    def destroy(self):
+        """Clean up when closing"""
+        try:
+            super().destroy()
+        except Exception as e:
+            print(f"Error destroying ChainViewer: {e}")
