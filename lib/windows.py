@@ -100,6 +100,206 @@ class StreamHandler:
         threading.Thread(target=generate, daemon=True).start()
 
 # ======================
+# Service Layer (DB Operations Decoupled from UI)
+# ======================
+
+class PopupDataService:
+    """Encapsulates all DB operations for popups. Decouples UI from DB schema."""
+    def __init__(self, db=None):
+        self.db = db
+    
+    def save_word(self, word, translation, session_id=None):
+        """Save word to database. Returns word_id or None if no DB."""
+        if not self.db:
+            return None
+        
+        word_id = self.db.add_word(word, translation, example="")
+        if session_id:
+            self.db.add_word_to_session(session_id, word_id)
+        return word_id
+    
+    def save_explanation_as_content(self, title, content, session_id=None, parent_node_id=None):
+        """Store explanation as content node. Returns node_id or None if no DB."""
+        if not self.db:
+            return None
+        
+        return self.db.create_content_node(
+            node_type='response',
+            content=content,
+            title=title,
+            parent_node_id=parent_node_id,
+            session_id=session_id,
+            metadata={"source": "popup_explanation"}
+        )
+    
+    def record_word_occurrence(self, word, content_node_id, position_start=0, position_end=None):
+        """Record where a word appears in content. Requires DB."""
+        if not self.db or not content_node_id:
+            return
+        
+        word_id = self.db.get_word_id(word)
+        if word_id:
+            self.db.record_word_occurrence(
+                word_id=word_id,
+                content_node_id=content_node_id,
+                position_start=position_start,
+                position_end=position_end or len(word),
+                context_before="",
+                context_after=""
+            )
+    
+    def get_active_session_id(self):
+        """Get current active session ID, or None if no session or no DB."""
+        if not self.db:
+            return None
+        active = self.db.get_active_session()
+        return active['session_id'] if active else None
+    
+    def word_exists(self, word):
+        """Check if word already exists in database."""
+        if not self.db:
+            return False
+        return self.db.get_word_id(word) is not None
+
+
+class TranslationDialog:
+    """Modal dialog to prompt user for translation confirmation/editing."""
+    def __init__(self, master, word, suggested_translation=""):
+        self.result = None
+        self.dialog = customtkinter.CTkToplevel(master)
+        self.dialog.geometry("500x250")
+        self.dialog.title(f"Confirm Translation: {word}")
+        self.dialog.attributes("-topmost", True)
+        self.dialog.resizable(False, False)
+        
+        # Make dialog modal
+        self.dialog.grab_set()
+        
+        # Word display
+        customtkinter.CTkLabel(
+            self.dialog, 
+            text=f"Word: {word}", 
+            font=("Mengshen-Handwritten", 18, "bold")
+        ).pack(pady=(10, 5))
+        
+        # Translation label
+        customtkinter.CTkLabel(
+            self.dialog,
+            text="Translation (edit if needed):",
+            font=("Mengshen-Handwritten", 12)
+        ).pack(pady=(5, 2))
+        
+        # Translation text box
+        self.translation_box = customtkinter.CTkTextbox(
+            self.dialog,
+            wrap="word",
+            font=("Mengshen-Handwritten", 12),
+            height=4
+        )
+        self.translation_box.insert("1.0", suggested_translation)
+        self.translation_box.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        
+        # Button frame
+        button_frame = customtkinter.CTkFrame(self.dialog, fg_color="transparent")
+        button_frame.pack(fill="x", padx=10, pady=(0, 10))
+        
+        customtkinter.CTkButton(
+            button_frame,
+            text="✓ Save",
+            fg_color="green",
+            command=self._on_save
+        ).pack(side="left", padx=5, expand=True, fill="x")
+        
+        customtkinter.CTkButton(
+            button_frame,
+            text="✕ Cancel",
+            fg_color="#942626",
+            command=self._on_cancel
+        ).pack(side="left", padx=5, expand=True, fill="x")
+    
+    def _on_save(self):
+        self.result = self.translation_box.get("1.0", "end-1c").strip()
+        self.dialog.destroy()
+    
+    def _on_cancel(self):
+        self.result = None
+        self.dialog.destroy()
+    
+    def show(self):
+        """Show modal and return translation or None if cancelled."""
+        self.dialog.focus_set()
+        self.dialog.wait_window()
+        return self.result
+
+
+class PopupSaveManager:
+    """Orchestrates word save workflow: extraction, validation, user confirmation."""
+    def __init__(self, data_service, parent_widget=None):
+        self.data_service = data_service
+        self.parent_widget = parent_widget
+    
+    def extract_translation(self, explanation_text):
+        """Extract translation from AI explanation text.
+        
+        Strategy: Take first sentence (up to . ! or ?), or first 150 chars.
+        This is the suggested translation; user can edit it.
+        """
+        if not explanation_text:
+            return ""
+        
+        # Try to extract first sentence
+        import re
+        sentences = re.split(r'[。！？\.\!\?]', explanation_text)
+        first_sentence = sentences[0].strip() if sentences else ""
+        
+        # If too long, truncate
+        if len(first_sentence) > 200:
+            first_sentence = first_sentence[:197] + "..."
+        
+        return first_sentence
+    
+    def save_word_with_prompt(self, word, explanation_text, parent_node_id=None):
+        """Save word: extract translation, prompt user to confirm, then save.
+        
+        Returns: word_id if saved, None if cancelled.
+        """
+        if not word or not word.strip():
+            return None
+        
+        word = word.strip()
+        
+        # Check if word already exists
+        if self.data_service.word_exists(word):
+            tkmb.showinfo("Word Exists", f"'{word}' is already in your vocabulary.")
+            return None
+        
+        # Extract suggested translation
+        suggested = self.extract_translation(explanation_text)
+        
+        # Prompt user to confirm/edit translation
+        dialog = TranslationDialog(
+            self.parent_widget or tk._default_root,
+            word,
+            suggested
+        )
+        translation = dialog.show()
+        
+        if not translation:  # User cancelled
+            return None
+        
+        # Get active session if available
+        session_id = self.data_service.get_active_session_id()
+        
+        # Save to DB
+        word_id = self.data_service.save_word(word, translation, session_id=session_id)
+        
+        # Record word occurrence in content node if available
+        if word_id and parent_node_id:
+            self.data_service.record_word_occurrence(word, parent_node_id)
+        
+        return word_id
+
+# ======================
 # Reusable Components
 # ======================
 
@@ -207,27 +407,61 @@ class LookupPanel(customtkinter.CTkFrame):
         except Exception:
             return "No match found"
 
-    def _show_word_mode_popup(self, word):
-        popup = customtkinter.CTkToplevel(self)
-        popup.geometry("400x200")
+    def _default_word_click(self, word, selected_mode):
+        message = f"Mode: {selected_mode}\nWord: {word}\n\n{self._format_lookup_text(word)}"
+        Long_message_popup(f"{word} — {selected_mode}", message, master=self, display_image=True, 
+                           word_index=self.word_index, char_def_index=self.char_def_index, word_click_callback=None).show()
+
+    def _show_word_mode_popup(self, word, parent_node_id=None, data_service=None, db=None, session_id=None):
+        """Show word mode popup with chain tracking
+        
+        Args:
+            data_service: PopupDataService instance (preferred over raw db)
+            db: (deprecated) Use data_service instead
+        """
+        popup = ctk.CTkToplevel(self)
+        popup.geometry("400x250")
         popup.title(f"Select Mode for '{word}'")
         popup.attributes("-topmost", True)
         
-        customtkinter.CTkLabel(popup, text=f"Word: {word}", font=("Mengshen-Handwritten", 16, "bold")).pack(pady=(10, 5))
-        customtkinter.CTkLabel(popup, text="Choose a mode:", font=("Mengshen-Handwritten", 12)).pack(pady=5)
+        ctk.CTkLabel(popup, text=f"Word: {word}", font=("Mengshen-Handwritten", 16, "bold")).pack(pady=(10, 5))
+        ctk.CTkLabel(popup, text="Choose a mode:", font=("Mengshen-Handwritten", 12)).pack(pady=5)
         
-        mode_var = customtkinter.StringVar(value=MODES[0])
-        customtkinter.CTkOptionMenu(popup, values=MODES, variable=mode_var, font=("Mengshen-Handwritten", 11)).pack(pady=10, padx=20, fill="x")
+        mode_var = ctk.StringVar(value=MODES[0])
+        ctk.CTkOptionMenu(popup, values=MODES, variable=mode_var, font=("Mengshen-Handwritten", 11)).pack(pady=10, padx=20, fill="x")
         
-        button_frame = customtkinter.CTkFrame(popup, fg_color="transparent")
+        button_frame = ctk.CTkFrame(popup, fg_color="transparent")
         button_frame.pack(pady=10, padx=20, fill="x")
-        customtkinter.CTkButton(button_frame, text="✓ Select", fg_color="green", command=lambda: [self.word_click_callback(word, mode_var.get()), popup.destroy()]).pack(side="left", padx=5, expand=True)
-        customtkinter.CTkButton(button_frame, text="✕ Cancel", fg_color="#942626", command=popup.destroy).pack(side="left", padx=5, expand=True)
-
-    def _default_word_click(self, word, selected_mode):
-        message = f"Mode: {selected_mode}\nWord: {word}\n\n{self._format_lookup_text(word)}"
-        Long_message_popup(f"{word} — {selected_mode}", message, master=self, display_image=True, word_index=self.word_index, char_def_index=self.char_def_index, word_click_callback=None).show()
-
+        
+        # Use data_service if provided, otherwise fall back to db
+        service = data_service
+        if not service and db:
+            service = PopupDataService(db)
+        
+        def on_select():
+            # Create a content node for this word lookup if service available
+            if service and service.db and parent_node_id:
+                node_id = service.save_explanation_as_content(
+                    title=f"Lookup: {word}",
+                    content=word,
+                    session_id=session_id,
+                    parent_node_id=parent_node_id
+                )
+                # Record word occurrence
+                if node_id:
+                    service.record_word_occurrence(word, node_id, 0, len(word))
+            
+            self.word_click_callback(word, mode_var.get())
+            popup.destroy()
+        
+        ctk.CTkButton(button_frame, text="✓ Select", fg_color="green", command=on_select).pack(side="left", padx=5, expand=True)
+        ctk.CTkButton(button_frame, text="✕ Cancel", fg_color="#942626", command=popup.destroy).pack(side="left", padx=5, expand=True)
+        
+        # Chain info if available
+        if parent_node_id and service and service.db:
+            chain_info = ctk.CTkLabel(popup, text=f"🔗 This lookup will be linked to existing content", 
+                                    font=ctk.CTkFont(size=10), text_color="green")
+            chain_info.pack(pady=5)
 
 class ThinkBox(customtkinter.CTkFrame):
     """Reusable collapsible thinking box component."""
@@ -267,12 +501,14 @@ class ThinkBox(customtkinter.CTkFrame):
 
 
 class ControlPanel:
-    def __init__(self, app_callback=None, ai_client:OllamaClient=OllamaClient(), db=None): 
+    def __init__(self, app_callback=None, ai_client:OllamaClient=OllamaClient(), db=None, data_service=None): 
         customtkinter.set_appearance_mode("dark")
         customtkinter.set_default_color_theme(os.path.join(current_folder, "theme.json"))
 
         self.ai = ai_client
         self.db = db
+        # Create or use provided data service for popup operations
+        self.data_service = data_service or PopupDataService(db)
         self.ai_opened = True
         self.opened = False
         self.done = False
@@ -568,6 +804,38 @@ class ControlPanel:
                 ctk.CTkLabel(word_frame, text=w['translation'][:40], width=250).pack(side="left", padx=5)
         else:
             ctk.CTkLabel(popup, text="No words in this session yet.").pack(pady=20)
+    def get_current_chain_context(self):
+        """Get the current chain context for new lookups/responses"""
+        active_session = self.db.get_active_session() if self.db else None
+        return {
+            "db": self.db,
+            "session_id": active_session['session_id'] if active_session else None,
+            "parent_node_id": self.current_response_node_id if hasattr(self, 'current_response_node_id') else None
+        }
+
+    def store_generated_response(self, user_query: str, ai_response: str, mode: str):
+        """Store AI response as a content node"""
+        if not self.data_service or not self.data_service.db:
+            return None
+        
+        # Get current session
+        session_id = self.data_service.get_active_session_id()
+        
+        # Get parent node (the query that triggered this)
+        parent_node_id = None
+        if hasattr(self, 'last_query_node_id'):
+            parent_node_id = self.last_query_node_id
+        
+        # Create response node
+        node_id = self.data_service.save_explanation_as_content(
+            title=f"AI Response to: {user_query[:50]}",
+            content=ai_response,
+            session_id=session_id,
+            parent_node_id=parent_node_id
+        )
+        
+        self.current_response_node_id = node_id
+        return node_id
     def show(self):
         self.root.mainloop()
 
@@ -597,13 +865,35 @@ def popup_message(title, message, is_yes_no=False, parent=None):
 
 
 class Long_message_popup:
-    def __init__(self, title, message, master, display_image=True, word_index=None, char_def_index=None, word_click_callback=None):
+    def __init__(self, title, message, master, display_image=True, 
+             word_index=None, char_def_index=None, word_click_callback=None,
+             data_service=None, db=None, session_id=None, parent_node_id=None):
+        """
+        Args:
+            data_service: PopupDataService instance (recommended over raw db param)
+            db: (deprecated) Use data_service instead. Kept for backwards compatibility.
+            session_id: Active session ID (passed to data_service for word saves)
+            parent_node_id: Parent content node ID (for content chain)
+        """
         parent = getattr(master, 'root', master)
         self.long_popup = customtkinter.CTkToplevel(parent)
-        self.long_popup.geometry("900x400")
+        self.long_popup.geometry("900x550")  # Increased height for button visibility
         self.long_popup.title(title)
         self.long_popup.attributes("-topmost", True)
         
+        # Support both new (data_service) and old (db) API; prefer data_service
+        if data_service:
+            self.data_service = data_service
+        elif db:
+            self.data_service = PopupDataService(db)
+        else:
+            self.data_service = PopupDataService(None)
+        
+        self.db = db  # Keep for backward compatibility
+        self.session_id = session_id
+        self.parent_node_id = parent_node_id
+        self.current_node_id = None
+
         customtkinter.CTkLabel(self.long_popup, text=title, font=("Mengshen-Handwritten", 24, "bold")).pack(pady=(5, 5))
         
         content_frame = customtkinter.CTkFrame(self.long_popup, fg_color="transparent")
@@ -651,10 +941,16 @@ class Long_message_popup:
             self.lookup_panel.bind_text_box(self.input_box)
             self.lookup_panel.bind_text_box(self.text_box)
             self.lookup_panel.bind_text_box(self.think_component.think_box)
+        
+        if self.data_service and self.data_service.db:
+            chain_btn = ctk.CTkButton(self.long_popup, text="🔗 View Chain", width=100,
+                                    command=self._view_chain)
+            chain_btn.pack(side="bottom", pady=5)
 
     def add_button(self, text, command):
+        """Add button to popup with proper layout (visible at bottom)."""
         btn = customtkinter.CTkButton(self.long_popup, text=text, command=command)
-        btn.pack(side="bottom", pady=10)
+        btn.pack(side="bottom", expand=True, fill="x", pady=10, padx=10)
         return btn
     def append_think(self, new_text):
         self.think_component.append_think(new_text)
@@ -664,7 +960,46 @@ class Long_message_popup:
         self.text_box.insert("end", new_text)
         self.text_box.configure(state="disabled")
         self.text_box.see("end")
-    
+    def store_as_content_node(self):
+        """Store this popup's content as a content node in the database"""
+        if not self.data_service or not self.data_service.db:
+            return None
+        
+        node_type = 'response'
+        title = self.long_popup.title()
+        content = self.text_box.get("1.0", "end-1c")
+        
+        node_id = self.data_service.save_explanation_as_content(
+            title=title,
+            content=content,
+            session_id=self.session_id,
+            parent_node_id=self.parent_node_id
+        )
+        self.current_node_id = node_id
+        
+        # Record word occurrences in content
+        if node_id:
+            import re
+            chinese_words = set(re.findall(r'[\u4e00-\u9fff]{2,}', content))
+            for word in chinese_words:
+                self.data_service.record_word_occurrence(word, node_id)
+        
+        return node_id
+
+    def _view_chain(self):
+        """Open chain viewer for this content"""
+        if not self.data_service or not self.data_service.db:
+            return
+        
+        if not self.current_node_id:
+            # Store as node first
+            self.store_as_content_node()
+        
+        if self.current_node_id:
+            from lib.chain_viewer import ChainViewer
+            viewer = ChainViewer(self.long_popup, self.data_service.db, self.current_node_id, 
+                                f"Chain for: {self.long_popup.title()}")
+            viewer.focus()
     def show(self):
         self.long_popup.focus_set()
 

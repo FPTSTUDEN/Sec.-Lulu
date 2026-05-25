@@ -158,6 +158,52 @@ class VocabDatabase:
                 FOREIGN KEY(session_id) REFERENCES learning_sessions(session_id)
             )
         """)
+                # Content nodes - every piece of content that can be linked
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS content_nodes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                node_type TEXT NOT NULL,  -- 'raw_text', 'sentence', 'query', 'response', 'word_lookup'
+                content TEXT,
+                title TEXT,
+                metadata TEXT,  -- JSON string for additional data
+                path_json TEXT,  -- JSON array of ancestor node IDs (fast chain retrieval)
+                session_id TEXT,
+                source_text_id TEXT,  -- Reference to original text source
+                created_at INTEGER,
+                FOREIGN KEY(session_id) REFERENCES learning_sessions(session_id)
+            )
+        """)
+
+        # Content edges - relationships between nodes
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS content_edges (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                from_node_id INTEGER,
+                to_node_id INTEGER,
+                edge_type TEXT,  -- 'triggered_by', 'contains', 'clicked_from', 'refers_to'
+                position_start INTEGER,
+                position_end INTEGER,
+                weight REAL DEFAULT 1.0,
+                created_at INTEGER,
+                FOREIGN KEY(from_node_id) REFERENCES content_nodes(id),
+                FOREIGN KEY(to_node_id) REFERENCES content_nodes(id)
+            )
+        """)
+
+        # Word occurrences in content nodes
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS word_occurrences (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                word_id TEXT,
+                content_node_id INTEGER,
+                position_start INTEGER,
+                position_end INTEGER,
+                context_before TEXT,
+                context_after TEXT,
+                FOREIGN KEY(word_id) REFERENCES words(id),
+                FOREIGN KEY(content_node_id) REFERENCES content_nodes(id)
+            )
+        """)
         conn.commit()
         conn.close()
     
@@ -592,6 +638,208 @@ class VocabDatabase:
             "created_at": r[2],
             "theme": r[3]
         } for r in cursor.fetchall()]
+    # ===== CONTENT CHAIN METHODS =====
+
+    def create_content_node(self, node_type: str, content: str, title: str = None,
+                            parent_node_id: int = None, session_id: str = None,
+                            metadata: Dict = None, source_text_id: str = None) -> int:
+        """
+        Create a content node with automatic JSON path building.
+        Returns node_id.
+        """
+        now = int(time.time())
+        cursor = self._get_cursor()
+        
+        # Build path JSON from parent
+        path_json = "[]"
+        if parent_node_id:
+            cursor.execute("SELECT path_json FROM content_nodes WHERE id = ?", (parent_node_id,))
+            row = cursor.fetchone()
+            if row:
+                parent_path = json.loads(row[0]) if row[0] else []
+                path_json = json.dumps(parent_path + [parent_node_id])
+        
+        metadata_json = json.dumps(metadata) if metadata else None
+        
+        cursor.execute("""
+            INSERT INTO content_nodes (node_type, content, title, metadata, path_json, session_id, source_text_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (node_type, content[:5000], title, metadata_json, path_json, session_id, source_text_id, now))
+        
+        node_id = cursor.lastrowid
+        self._get_connection().commit()
+        
+        # Create edge to parent if parent exists
+        if parent_node_id:
+            self.create_content_edge(parent_node_id, node_id, 'triggered_by')
+        
+        return node_id
+
+    def create_content_edge(self, from_node_id: int, to_node_id: int, edge_type: str,
+                            position_start: int = None, position_end: int = None, weight: float = 1.0) -> int:
+        """Create a directed edge between two content nodes."""
+        now = int(time.time())
+        cursor = self._get_cursor()
+        cursor.execute("""
+            INSERT INTO content_edges (from_node_id, to_node_id, edge_type, position_start, position_end, weight, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (from_node_id, to_node_id, edge_type, position_start, position_end, weight, now))
+        self._get_connection().commit()
+        return cursor.lastrowid
+
+    def get_content_node(self, node_id: int) -> Optional[Dict]:
+        """Get a content node by ID."""
+        cursor = self._get_cursor()
+        cursor.execute("""
+            SELECT id, node_type, content, title, metadata, path_json, session_id, source_text_id, created_at
+            FROM content_nodes WHERE id = ?
+        """, (node_id,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "node_type": row[1],
+            "content": row[2],
+            "title": row[3],
+            "metadata": json.loads(row[4]) if row[4] else {},
+            "path_json": row[5],
+            "session_id": row[6],
+            "source_text_id": row[7],
+            "created_at": row[8]
+        }
+
+    def get_content_chain(self, node_id: int, max_depth: int = 10) -> List[Dict]:
+        """
+        Get the full chain of ancestors for a node using JSON path.
+        This is O(depth) - very fast!
+        """
+        node = self.get_content_node(node_id)
+        if not node:
+            return []
+        
+        chain = [node]
+        
+        # Parse the path JSON to get ancestor IDs
+        path_ids = json.loads(node['path_json']) if node['path_json'] else []
+        
+        # Fetch ancestors in reverse order (oldest first)
+        for ancestor_id in reversed(path_ids):
+            ancestor = self.get_content_node(ancestor_id)
+            if ancestor:
+                chain.insert(0, ancestor)
+        
+        return chain
+
+    def get_node_children(self, node_id: int, edge_type: str = None) -> List[Dict]:
+        """Get children nodes (what this node led to)."""
+        cursor = self._get_cursor()
+        query = """
+            SELECT cn.* FROM content_nodes cn
+            JOIN content_edges ce ON cn.id = ce.to_node_id
+            WHERE ce.from_node_id = ?
+        """
+        params = [node_id]
+        if edge_type:
+            query += " AND ce.edge_type = ?"
+            params.append(edge_type)
+        query += " ORDER BY ce.created_at"
+        
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        
+        children = []
+        for row in rows:
+            children.append({
+                "id": row[0],
+                "node_type": row[1],
+                "content": row[2],
+                "title": row[3],
+                "created_at": row[8]
+            })
+        return children
+
+    def record_word_occurrence(self, word_id: str, content_node_id: int,
+                            position_start: int, position_end: int,
+                            context_before: str = "", context_after: str = ""):
+        """Record where a word appears in a content node."""
+        cursor = self._get_cursor()
+        cursor.execute("""
+            INSERT INTO word_occurrences (word_id, content_node_id, position_start, position_end, context_before, context_after)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (word_id, content_node_id, position_start, position_end, context_before[:50], context_after[:50]))
+        self._get_connection().commit()
+
+    def find_word_occurrences(self, word: str) -> List[Dict]:
+        """Find all occurrences of a word across content nodes."""
+        word_id = self.get_word_id(word)
+        if not word_id:
+            return []
+        
+        cursor = self._get_cursor()
+        cursor.execute("""
+            SELECT wo.*, cn.node_type, cn.title, cn.content
+            FROM word_occurrences wo
+            JOIN content_nodes cn ON wo.content_node_id = cn.id
+            WHERE wo.word_id = ?
+            ORDER BY cn.created_at DESC
+        """, (word_id,))
+        
+        results = []
+        for row in cursor.fetchall():
+            results.append({
+                "content_node_id": row[1],
+                "node_type": row[8],
+                "title": row[9],
+                "context": row[6] + row[7] if row[6] or row[7] else None,
+                "position_start": row[3],
+                "position_end": row[4]
+            })
+        return results
+
+    def find_connected_words(self, word: str, max_hops: int = 2) -> List[Dict]:
+        """
+        Find words connected to this word through content chains.
+        Uses the JSON path relationships.
+        """
+        word_id = self.get_word_id(word)
+        if not word_id:
+            return []
+        
+        cursor = self._get_cursor()
+        # Find all content nodes containing this word
+        cursor.execute("""
+            SELECT DISTINCT cn.id, cn.path_json
+            FROM word_occurrences wo
+            JOIN content_nodes cn ON wo.content_node_id = cn.id
+            WHERE wo.word_id = ?
+        """, (word_id,))
+        
+        related_words = {}
+        
+        for row in cursor.fetchall():
+            content_node_id = row[0]
+            path_json = row[1]
+            
+            # Find other words in same or connected content nodes
+            cursor2 = self._get_cursor()
+            cursor2.execute("""
+                SELECT DISTINCT w.word, COUNT(*) as strength
+                FROM word_occurrences wo2
+                JOIN words w ON wo2.word_id = w.id
+                WHERE wo2.content_node_id = ?
+                AND w.id != ?
+                GROUP BY w.word
+                ORDER BY strength DESC
+                LIMIT 10
+            """, (content_node_id, word_id))
+            
+            for r in cursor2.fetchall():
+                related_words[r[0]] = related_words.get(r[0], 0) + r[1]
+        
+        # Sort by strength
+        sorted_words = sorted(related_words.items(), key=lambda x: x[1], reverse=True)
+        return [{"word": w, "strength": s} for w, s in sorted_words[:10]]
     def __enter__(self):
         return self
     

@@ -9,7 +9,7 @@ import pyperclip
 import requests
 import time
 from PIL import Image
-from lib.windows import ControlPanel, App, Long_message_popup
+from lib.windows import ControlPanel, App, Long_message_popup, PopupDataService, PopupSaveManager
 from lib.reviewer import WordReviewer
 from lib.db import VocabDatabase
 from lib.learner_prompts import get_prompt, prompt_generator_for_mode
@@ -45,6 +45,9 @@ class IntegratedApp:
         self.word_index = word_index
         self.char_index = char_index
         self.char_def_index = char_def_index
+        # Services for popup operations (will be initialized in run())
+        self.data_service = None
+        self.save_manager = None
     
     def launch_vocab_app(self):
         """Launch the vocabulary learning app in a separate thread"""
@@ -123,9 +126,10 @@ class IntegratedApp:
     def _show_explanation_popup(self, text, explanation_generator):
         """Handles the streaming update of the popup UI."""
         
-        # Create the popup immediately (ensure Long_message_popup is modified to allow updates)
-        # We pass empty string initially
-        # print(self.control_panel.response_mode)
+        # Create the popup with data service for DB operations
+        # Get parent node ID from control panel if available
+        parent_node_id = getattr(self.control_panel, 'current_response_node_id', None)
+        
         response_popup = Long_message_popup(
             "Explanation",
             text,
@@ -133,6 +137,9 @@ class IntegratedApp:
             display_image=(self.control_panel.response_mode.lower() != "lookup only"),
             word_index=self.word_index,
             char_def_index=self.char_def_index,
+            data_service=self.data_service,
+            session_id=self.data_service.get_active_session_id() if self.data_service else None,
+            parent_node_id=parent_node_id
         )
         
         def stream_thread():
@@ -149,7 +156,7 @@ class IntegratedApp:
                         # Update the UI on the main thread
                         self.control_panel.root.after(0, lambda c=chunk: response_popup.append_text(c))
 
-                # Once finished, enable the save button logic
+                # Once finished, enable the save button with PopupSaveManager
                 self.control_panel.root.after(0, lambda: self._setup_save_button(response_popup, text, full_explanation))
             except Exception as e:
                 print(f"Streaming error: {e}")
@@ -157,14 +164,20 @@ class IntegratedApp:
         threading.Thread(target=stream_thread, daemon=True).start()
         response_popup.show()
 
-    def _setup_save_button(self, popup, text, final_text):
+    def _setup_save_button(self, popup, word, explanation_text):
+        """Setup save button using PopupSaveManager"""
         def save_logic():
-            db = self.db_cls(self.db_path)
-            # ... (your existing save logic) ...
-            db.close()
+            if self.save_manager:
+                word_id = self.save_manager.save_word_with_prompt(
+                    word, 
+                    explanation_text,
+                    parent_node_id=popup.current_node_id
+                )
+                if word_id:
+                    print(f"✓ Word '{word}' saved successfully!")
             popup.long_popup.destroy()
             
-        popup.add_button("Save/Update word", save_logic)
+        popup.add_button("💾 Save/Update word", save_logic)
     
     def _generate_for_word(self, text):
         """Generate explanation for a word and display in popup."""
@@ -240,14 +253,24 @@ class IntegratedApp:
             # Start pre-loading in the background on startup
             threading.Thread(target=lambda: self.ai.manage_model("load"), daemon=True).start()
             
-            # Pass the AI client and database so the UI can manage sessions
+            # Initialize database and services
             if self.database is None:
                 self.database = self.db_cls(self.db_path)
+            
+            # Create data service for popup DB operations
+            self.data_service = PopupDataService(self.database)
+            
+            # Create the control panel (which will use data_service internally)
             self.control_panel = ControlPanel(
                 app_callback=self.launch_vocab_app,
                 ai_client=self.ai,
-                db=self.database
+                db=self.database,
+                data_service=self.data_service
             )
+            
+            # Create save manager for word save workflow (prompts user for translation)
+            self.save_manager = PopupSaveManager(self.data_service, parent_widget=self.control_panel.root)
+            
             # Set the callback for generating explanations when clipboard is clicked
             self.control_panel.generate_callback = self._generate_for_word
             print("=" * 50)
