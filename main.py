@@ -140,7 +140,7 @@ class IntegratedApp:
             data_service=self.data_service,
             session_id=self.data_service.get_active_session_id() if self.data_service else None,
             parent_node_id=parent_node_id,
-            save_manager=self.save_manager
+            generate_explanation_callback=self._generate_for_word
         )
         
         def stream_thread():
@@ -180,13 +180,30 @@ class IntegratedApp:
             
         popup.add_button("💾 Save/Update word", save_logic)
     
-    def _generate_for_word(self, text):
-        """Generate explanation for a word and display in popup."""
-        explanation = self.get_explanation(text)
-        # Wrap string explanation in a generator if needed
-        if isinstance(explanation, str):
-            explanation = (explanation,)
-        self._show_explanation_popup(text, explanation)
+    def _generate_for_word(self, text, mode=None):
+        """Generate explanation for a word and display in popup.
+        
+        Args:
+            text: The word to explain
+            mode: (optional) Response mode. If provided, temporarily override control_panel mode.
+                  Used for chained popups when user selects a specific mode.
+        """
+        # Temporarily set control panel response mode if specified (for chained responses)
+        original_mode = None
+        if mode and self.control_panel:
+            original_mode = self.control_panel.response_mode
+            self.control_panel.response_mode = mode
+        
+        try:
+            explanation = self.get_explanation(text)
+            # Wrap string explanation in a generator if needed
+            if isinstance(explanation, str):
+                explanation = (explanation,)
+            self._show_explanation_popup(text, explanation)
+        finally:
+            # Restore original mode if we changed it
+            if original_mode and self.control_panel:
+                self.control_panel.response_mode = original_mode
     
     def _poll_clipboard(self):
         """Poll clipboard for Chinese text - called via control_panel.root.after()"""

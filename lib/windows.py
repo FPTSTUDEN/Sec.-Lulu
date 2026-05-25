@@ -305,7 +305,8 @@ class PopupSaveManager:
 
 class LookupPanel(customtkinter.CTkFrame):
     """Reusable sidebar panel for CEDICT lookup with hover binding support."""
-    def __init__(self, master, word_index=None, char_def_index=None, word_click_callback=None, **kwargs):
+    def __init__(self, master, word_index=None, char_def_index=None, word_click_callback=None, 
+                 generate_explanation_callback=None, data_service=None, parent_node_id=None, **kwargs):
         super().__init__(master, fg_color=("gray85", "gray25"), corner_radius=8, **kwargs)
         self.word_index = word_index or {}
         self.char_def_index = char_def_index or {}
@@ -313,6 +314,9 @@ class LookupPanel(customtkinter.CTkFrame):
         self.tracked_text_widgets = []
         self.current_hovered_word = None
         self.word_click_callback = word_click_callback or self._default_word_click
+        self.generate_explanation_callback = generate_explanation_callback
+        self.data_service = data_service
+        self.parent_node_id = parent_node_id
 
         lookup_title = customtkinter.CTkLabel(self, text="📖 Lookup", font=("Mengshen-Handwritten", 14, "bold"), text_color="orange")
         lookup_title.pack(pady=5)
@@ -433,32 +437,39 @@ class LookupPanel(customtkinter.CTkFrame):
         button_frame = ctk.CTkFrame(popup, fg_color="transparent")
         button_frame.pack(pady=10, padx=20, fill="x")
         
-        # Use data_service if provided, otherwise fall back to db
-        service = data_service
+        # Use provided data_service or fall back to instance data_service, or create from db
+        service = data_service or self.data_service
         if not service and db:
             service = PopupDataService(db)
         
         def on_select():
             # Create a content node for this word lookup if service available
-            if service and service.db and parent_node_id:
+            if service and service.db and (parent_node_id or self.parent_node_id):
                 node_id = service.save_explanation_as_content(
                     title=f"Lookup: {word}",
                     content=word,
                     session_id=session_id,
-                    parent_node_id=parent_node_id
+                    parent_node_id=parent_node_id or self.parent_node_id
                 )
                 # Record word occurrence
                 if node_id:
                     service.record_word_occurrence(word, node_id, 0, len(word))
             
-            self.word_click_callback(word, mode_var.get())
+            # If generate_explanation_callback is available, use it for full AI response with streaming & save
+            # This passes the selected mode so chained popups use the correct response style
+            if self.generate_explanation_callback:
+                self.generate_explanation_callback(word, mode_var.get())
+            else:
+                # Fallback to static word click for backwards compatibility
+                self.word_click_callback(word, mode_var.get())
+            
             popup.destroy()
         
         ctk.CTkButton(button_frame, text="✓ Select", fg_color="green", command=on_select).pack(side="left", padx=5, expand=True)
         ctk.CTkButton(button_frame, text="✕ Cancel", fg_color="#942626", command=popup.destroy).pack(side="left", padx=5, expand=True)
         
         # Chain info if available
-        if parent_node_id and service and service.db:
+        if (parent_node_id or self.parent_node_id) and service and service.db:
             chain_info = ctk.CTkLabel(popup, text=f"🔗 This lookup will be linked to existing content", 
                                     font=ctk.CTkFont(size=10), text_color="green")
             chain_info.pack(pady=5)
@@ -867,24 +878,22 @@ def popup_message(title, message, is_yes_no=False, parent=None):
 class Long_message_popup:
     def __init__(self, title, message, master, display_image=True, 
              word_index=None, char_def_index=None, word_click_callback=None,
-             data_service=None, db=None, session_id=None, parent_node_id=None, save_manager=None):
+             data_service=None, db=None, session_id=None, parent_node_id=None,
+             generate_explanation_callback=None):
         """
         Args:
             data_service: PopupDataService instance (recommended over raw db param)
             db: (deprecated) Use data_service instead. Kept for backwards compatibility.
             session_id: Active session ID (passed to data_service for word saves)
             parent_node_id: Parent content node ID (for content chain)
-            save_manager: PopupSaveManager for word save workflow
+            generate_explanation_callback: Function to call for generating explanations (for chained popups)
+                Expected signature: callback(word, mode) -> streams response to new popup
         """
         parent = getattr(master, 'root', master)
         self.long_popup = customtkinter.CTkToplevel(parent)
         self.long_popup.geometry("900x550")  # Increased height for button visibility
         self.long_popup.title(title)
         self.long_popup.attributes("-topmost", True)
-        
-        # Store indices for chain viewer propagation
-        self.word_index = word_index or {}
-        self.char_def_index = char_def_index or {}
         
         # Support both new (data_service) and old (db) API; prefer data_service
         if data_service:
@@ -898,7 +907,7 @@ class Long_message_popup:
         self.session_id = session_id
         self.parent_node_id = parent_node_id
         self.current_node_id = None
-        self.save_manager = save_manager
+        self.generate_explanation_callback = generate_explanation_callback
 
         customtkinter.CTkLabel(self.long_popup, text=title, font=("Mengshen-Handwritten", 24, "bold")).pack(pady=(5, 5))
         
@@ -938,7 +947,11 @@ class Long_message_popup:
         self.text_box.configure(state="disabled")
         self.text_box.pack(side="left", fill="both", expand=True, padx=5, pady=5)
         
-        self.lookup_panel = LookupPanel(text_panel_frame, word_index=word_index, char_def_index=char_def_index, word_click_callback=word_click_callback)
+        self.lookup_panel = LookupPanel(text_panel_frame, word_index=word_index, char_def_index=char_def_index, 
+                                         word_click_callback=word_click_callback,
+                                         generate_explanation_callback=generate_explanation_callback,
+                                         data_service=self.data_service,
+                                         parent_node_id=parent_node_id)
         self.lookup_panel.pack(side="right", fill="y", padx=5, pady=5, ipadx=10, ipady=10)
         self.lookup_panel.pack_propagate(False)
         self.lookup_panel.configure(width=180)
@@ -958,40 +971,6 @@ class Long_message_popup:
         btn = customtkinter.CTkButton(self.long_popup, text=text, command=command)
         btn.pack(side="bottom", expand=True, fill="x", pady=10, padx=10)
         return btn
-    
-    def setup_save_word_button(self, save_manager):
-        """Setup save word button for this popup using PopupSaveManager.
-        
-        This is useful for both streaming responses and existing content nodes.
-        Automatically extracts translation from current content.
-        """
-        if not save_manager or not self.data_service:
-            return
-        
-        def save_logic():
-            content = self.text_box.get("1.0", "end-1c")
-            # Try to extract a meaningful word from content
-            # For response nodes, extract from title or first part of content
-            word = self.long_popup.title()
-            if word.startswith("AI Response to:"):
-                word = word.replace("AI Response to:", "").strip()[:50]
-            elif not word:
-                # Try to extract from content
-                import re
-                chinese_words = re.findall(r'[\u4e00-\u9fff]+', content)
-                word = chinese_words[0] if chinese_words else content[:20]
-            
-            if word:
-                word_id = save_manager.save_word_with_prompt(
-                    word, 
-                    content,
-                    parent_node_id=self.current_node_id or self.parent_node_id
-                )
-                if word_id:
-                    print(f"✓ Word '{word}' saved successfully!")
-                    self.long_popup.destroy()
-        
-        self.add_button("💾 Save/Update word", save_logic)
     def append_think(self, new_text):
         self.think_component.append_think(new_text)
     
@@ -1027,7 +1006,7 @@ class Long_message_popup:
         return node_id
 
     def _view_chain(self):
-        """Open chain viewer for this content with full service propagation"""
+        """Open chain viewer for this content"""
         if not self.data_service or not self.data_service.db:
             return
         
@@ -1037,17 +1016,8 @@ class Long_message_popup:
         
         if self.current_node_id:
             from lib.chain_viewer import ChainViewer
-            # Pass all services to ChainViewer so child popups have full capabilities
-            viewer = ChainViewer(
-                self.long_popup, 
-                self.data_service.db, 
-                self.current_node_id, 
-                f"Chain for: {self.long_popup.title()}",
-                data_service=self.data_service,
-                word_index=self.word_index,
-                char_def_index=self.char_def_index,
-                save_manager=self.save_manager
-            )
+            viewer = ChainViewer(self.long_popup, self.data_service.db, self.current_node_id, 
+                                f"Chain for: {self.long_popup.title()}")
             viewer.focus()
     def show(self):
         self.long_popup.focus_set()
