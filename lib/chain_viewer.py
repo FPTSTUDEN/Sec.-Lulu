@@ -9,12 +9,24 @@ class ChainViewer(ctk.CTkToplevel):
     """
     Popup window to display content chain relationships.
     Shows both backward chain (ancestors) and forward chain (children).
+    Supports viewing full content nodes with all features (lookup, save, streaming).
     """
     
-    def __init__(self, parent, db, node_id: int, title: str = "Content Chain"):
+    def __init__(self, parent, db, node_id: int, title: str = "Content Chain",
+                 data_service=None, word_index=None, char_def_index=None, save_manager=None):
+        """Args:
+            data_service: PopupDataService for DB operations
+            word_index: CEDICT word index for lookup
+            char_def_index: CEDICT character definition index
+            save_manager: PopupSaveManager for word saving workflow
+        """
         super().__init__(parent)
         self.db = db
         self.node_id = node_id
+        self.data_service = data_service
+        self.word_index = word_index or {}
+        self.char_def_index = char_def_index or {}
+        self.save_manager = save_manager
         self.title(title)
         self.geometry("800x600")
         self.attributes("-topmost", True)
@@ -180,7 +192,7 @@ class ChainViewer(ctk.CTkToplevel):
             ctk.CTkButton(word_frame, text="Lookup", width=60, command=lookup).pack(side="right", padx=5)
     
     def _add_node_card(self, node: Dict, is_current: bool = False):
-        """Add a visual card for a content node"""
+        """Add a visual card for a content node with View/Edit options"""
         card = ctk.CTkFrame(self.content_frame, 
                             fg_color=("blue" if is_current else "gray85", 
                                      "darkblue" if is_current else "gray25"),
@@ -213,8 +225,10 @@ class ChainViewer(ctk.CTkToplevel):
         
         # Content preview
         content = node.get('content', '')
+        truncated = False
         if len(content) > 200:
             content = content[:200] + "..."
+            truncated = True
         if content:
             ctk.CTkLabel(card, text=content, wraplength=600, justify="left", 
                          font=ctk.CTkFont(size=12)).pack(anchor="w", padx=15, pady=5)
@@ -223,14 +237,59 @@ class ChainViewer(ctk.CTkToplevel):
         btn_frame = ctk.CTkFrame(card, fg_color="transparent")
         btn_frame.pack(fill="x", padx=10, pady=5)
         
+        # View full content button (if truncated or has full content to show)
+        if node.get('id'):
+            full_btn = ctk.CTkButton(btn_frame, text="👁️ View Full", width=80, height=25,
+                                      fg_color="green",
+                                      command=lambda nid=node['id']: self._view_full_content(nid))
+            full_btn.pack(side="right", padx=2)
+        
         if node.get('id') != self.node_id:
-            view_btn = ctk.CTkButton(btn_frame, text="View Chain", width=80, height=25,
+            view_btn = ctk.CTkButton(btn_frame, text="🔗 View Chain", width=80, height=25,
                                       command=lambda nid=node['id']: self._open_chain(nid))
             view_btn.pack(side="right", padx=2)
     
+    def _view_full_content(self, node_id: int):
+        """Display full content node in a Long_message_popup with all features"""
+        from lib.windows import Long_message_popup
+        
+        node = self.db.get_content_node(node_id)
+        if not node:
+            self.status_label.configure(text="Error: Could not load node content")
+            return
+        
+        # Create popup with full service layer support
+        title = node.get('title', f"{node.get('node_type', 'Content')}")
+        content = node.get('content', '')
+        
+        popup = Long_message_popup(
+            title=title,
+            message=content,
+            master=self,
+            display_image=False,  # Existing content doesn't need decoration
+            word_index=self.word_index,
+            char_def_index=self.char_def_index,
+            data_service=self.data_service,
+            session_id=node.get('session_id'),
+            parent_node_id=node_id
+        )
+        
+        # Add save button if save_manager is available
+        if self.save_manager:
+            popup.setup_save_word_button(self.save_manager)
+        
+        popup.show()
+    
     def _open_chain(self, node_id: int):
-        """Open chain viewer for another node"""
-        new_viewer = ChainViewer(self, self.db, node_id, f"Content Chain - Node {node_id}")
+        """Open chain viewer for another node with full service propagation"""
+        new_viewer = ChainViewer(
+            self, self.db, node_id, 
+            f"Content Chain - Node {node_id}",
+            data_service=self.data_service,
+            word_index=self.word_index,
+            char_def_index=self.char_def_index,
+            save_manager=self.save_manager
+        )
         new_viewer.focus()
     
     def _lookup_word(self, word: str):

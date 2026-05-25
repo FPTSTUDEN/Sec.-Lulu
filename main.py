@@ -139,7 +139,8 @@ class IntegratedApp:
             char_def_index=self.char_def_index,
             data_service=self.data_service,
             session_id=self.data_service.get_active_session_id() if self.data_service else None,
-            parent_node_id=parent_node_id
+            parent_node_id=parent_node_id,
+            save_manager=self.save_manager
         )
         
         def stream_thread():

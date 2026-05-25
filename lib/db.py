@@ -9,6 +9,7 @@ import time
 import threading
 from typing import List, Tuple, Optional, Dict
 from datetime import datetime, timedelta
+import json
 
 
 class VocabDatabase:

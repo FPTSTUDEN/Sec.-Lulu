@@ -867,19 +867,24 @@ def popup_message(title, message, is_yes_no=False, parent=None):
 class Long_message_popup:
     def __init__(self, title, message, master, display_image=True, 
              word_index=None, char_def_index=None, word_click_callback=None,
-             data_service=None, db=None, session_id=None, parent_node_id=None):
+             data_service=None, db=None, session_id=None, parent_node_id=None, save_manager=None):
         """
         Args:
             data_service: PopupDataService instance (recommended over raw db param)
             db: (deprecated) Use data_service instead. Kept for backwards compatibility.
             session_id: Active session ID (passed to data_service for word saves)
             parent_node_id: Parent content node ID (for content chain)
+            save_manager: PopupSaveManager for word save workflow
         """
         parent = getattr(master, 'root', master)
         self.long_popup = customtkinter.CTkToplevel(parent)
         self.long_popup.geometry("900x550")  # Increased height for button visibility
         self.long_popup.title(title)
         self.long_popup.attributes("-topmost", True)
+        
+        # Store indices for chain viewer propagation
+        self.word_index = word_index or {}
+        self.char_def_index = char_def_index or {}
         
         # Support both new (data_service) and old (db) API; prefer data_service
         if data_service:
@@ -893,6 +898,7 @@ class Long_message_popup:
         self.session_id = session_id
         self.parent_node_id = parent_node_id
         self.current_node_id = None
+        self.save_manager = save_manager
 
         customtkinter.CTkLabel(self.long_popup, text=title, font=("Mengshen-Handwritten", 24, "bold")).pack(pady=(5, 5))
         
@@ -952,6 +958,40 @@ class Long_message_popup:
         btn = customtkinter.CTkButton(self.long_popup, text=text, command=command)
         btn.pack(side="bottom", expand=True, fill="x", pady=10, padx=10)
         return btn
+    
+    def setup_save_word_button(self, save_manager):
+        """Setup save word button for this popup using PopupSaveManager.
+        
+        This is useful for both streaming responses and existing content nodes.
+        Automatically extracts translation from current content.
+        """
+        if not save_manager or not self.data_service:
+            return
+        
+        def save_logic():
+            content = self.text_box.get("1.0", "end-1c")
+            # Try to extract a meaningful word from content
+            # For response nodes, extract from title or first part of content
+            word = self.long_popup.title()
+            if word.startswith("AI Response to:"):
+                word = word.replace("AI Response to:", "").strip()[:50]
+            elif not word:
+                # Try to extract from content
+                import re
+                chinese_words = re.findall(r'[\u4e00-\u9fff]+', content)
+                word = chinese_words[0] if chinese_words else content[:20]
+            
+            if word:
+                word_id = save_manager.save_word_with_prompt(
+                    word, 
+                    content,
+                    parent_node_id=self.current_node_id or self.parent_node_id
+                )
+                if word_id:
+                    print(f"✓ Word '{word}' saved successfully!")
+                    self.long_popup.destroy()
+        
+        self.add_button("💾 Save/Update word", save_logic)
     def append_think(self, new_text):
         self.think_component.append_think(new_text)
     
@@ -987,7 +1027,7 @@ class Long_message_popup:
         return node_id
 
     def _view_chain(self):
-        """Open chain viewer for this content"""
+        """Open chain viewer for this content with full service propagation"""
         if not self.data_service or not self.data_service.db:
             return
         
@@ -997,8 +1037,17 @@ class Long_message_popup:
         
         if self.current_node_id:
             from lib.chain_viewer import ChainViewer
-            viewer = ChainViewer(self.long_popup, self.data_service.db, self.current_node_id, 
-                                f"Chain for: {self.long_popup.title()}")
+            # Pass all services to ChainViewer so child popups have full capabilities
+            viewer = ChainViewer(
+                self.long_popup, 
+                self.data_service.db, 
+                self.current_node_id, 
+                f"Chain for: {self.long_popup.title()}",
+                data_service=self.data_service,
+                word_index=self.word_index,
+                char_def_index=self.char_def_index,
+                save_manager=self.save_manager
+            )
             viewer.focus()
     def show(self):
         self.long_popup.focus_set()
