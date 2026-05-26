@@ -9,7 +9,7 @@ import pyperclip
 import requests
 import time
 from PIL import Image
-from lib.windows import ControlPanel, App, Long_message_popup, PopupDataService, PopupSaveManager
+from lib.windows import ControlPanel, App, Long_message_popup, PopupDataService, PopupSaveManager, LearningContext
 from lib.reviewer import WordReviewer
 from lib.db import VocabDatabase
 from lib.learner_prompts import get_prompt, prompt_generator_for_mode
@@ -33,6 +33,7 @@ class IntegratedApp:
         self.db_path = db_path
         self.use_mock = use_mock
         self.database = None  # Will be created in the polling thread
+        self.context = None   # Will be created after database
         # pass the db class through to the reviewer so it uses the same type
         self.db_cls = MockDatabaseGenerator if use_mock else VocabDatabase
         self.reviewer = WordReviewer(db_path, db_cls=self.db_cls)
@@ -68,7 +69,7 @@ class IntegratedApp:
             # SQLite connections cannot be shared across threads
             reviewer = WordReviewer(self.db_path, db_cls=self.db_cls)
             db = self.db_cls(self.db_path)
-            self.app_window = App(reviewer, ai_client=self.ai, db=db, control_panel=self.control_panel)
+            self.app_window = App(reviewer, ai_client=self.ai, db=db, control_panel=self.control_panel, context=self.context)
             self.app_window.mainloop()
         except Exception as e:
             print(f"Error launching app: {e}")
@@ -123,57 +124,13 @@ class IntegratedApp:
         finally:
             db.close()
     
-    def _show_explanation_popup(self, text, explanation_generator, parent_node_id=None):
-        """Handles the streaming update of the popup UI."""
-        
-        # Create the popup with data service for DB operations
-        # Use passed parent_node_id, fallback to control panel tracking
-        effective_parent_id = parent_node_id or getattr(self.control_panel, 'current_response_node_id', None)
-        
-        response_popup = Long_message_popup(
-            "Explanation",
-            text,
-            master=self.control_panel,
-            display_image=(self.control_panel.response_mode.lower() != "lookup only"),
-            word_index=self.word_index,
-            char_def_index=self.char_def_index,
-            data_service=self.data_service,
-            session_id=self.data_service.get_active_session_id() if self.data_service else None,
-            parent_node_id=effective_parent_id,
-            generate_explanation_callback=self._generate_for_word
-        )
-        # ... rest stays the same
-        
-        def stream_thread():
-            full_explanation = ""
-            try:
-                for chunk in explanation_generator:
-                    # Route thinking-marked chunks to the think box
-                    if isinstance(chunk, str) and chunk.startswith("__THINK__"):
-                        thinking = chunk[len("__THINK__"):]
-                        full_explanation += thinking
-                        self.control_panel.root.after(0, lambda t=thinking: response_popup.append_think(t))
-                    else:
-                        full_explanation += chunk
-                        # Update the UI on the main thread
-                        self.control_panel.root.after(0, lambda c=chunk: response_popup.append_text(c))
-
-                # Once finished, enable the save button with PopupSaveManager
-                self.control_panel.root.after(0, lambda: self._setup_save_button(response_popup, text, full_explanation))
-            except Exception as e:
-                print(f"Streaming error: {e}")
-
-        threading.Thread(target=stream_thread, daemon=True).start()
-        response_popup.show()
-
     def _setup_save_button(self, popup, word, explanation_text):
         """Setup save button using PopupSaveManager"""
         def save_logic():
             if self.save_manager:
                 word_id = self.save_manager.save_word_with_prompt(
                     word, 
-                    explanation_text,
-                    parent_node_id=popup.current_node_id
+                    explanation_text
                 )
                 if word_id:
                     print(f"✓ Word '{word}' saved successfully!")
@@ -181,13 +138,13 @@ class IntegratedApp:
             
         popup.add_button("💾 Save/Update word", save_logic)
     
-    def _generate_for_word(self, text, mode=None, parent_node_id=None):
+    def _generate_for_word(self, text, mode=None, context=None):
         """Generate explanation for a word and display in popup.
         
         Args:
             text: The word to explain
             mode: (optional) Response mode. If provided, temporarily override control_panel mode.
-            parent_node_id: (optional) Parent content node ID for chain tracking
+            context: (optional) LearningContext to use for chain tracking
         """
         # Temporarily set control panel response mode if specified (for chained responses)
         original_mode = None
@@ -197,14 +154,38 @@ class IntegratedApp:
         
         try:
             explanation = self.get_explanation(text)
-            # Wrap string explanation in a generator if needed
             if isinstance(explanation, str):
                 explanation = (explanation,)
-            self._show_explanation_popup(text, explanation, parent_node_id=parent_node_id)
+            # Use provided context or the global one
+            if context:
+                self.context = context
+            self._show_explanation_popup(text, explanation)
         finally:
-            # Restore original mode if we changed it
             if original_mode and self.control_panel:
                 self.control_panel.response_mode = original_mode
+    
+    def _show_explanation_popup(self, text, explanation_generator):
+        """Handles the streaming update of the popup UI."""
+        
+        # Use the context for chain tracking
+        if not self.context:
+            self.context = LearningContext(self.database)
+        
+        response_popup = Long_message_popup(
+            "Explanation",
+            text,
+            master=self.control_panel,
+            display_image=(self.control_panel.response_mode.lower() != "lookup only"),
+            word_index=self.word_index,
+            char_def_index=self.char_def_index,
+            data_service=self.data_service,
+            context=self.context,
+            generate_explanation_callback=self._generate_for_word
+        )
+        
+        # Start streaming
+        response_popup.start_streaming(explanation_generator, text)
+        response_popup.show()
     
     def _poll_clipboard(self):
         """Poll clipboard for Chinese text - called via control_panel.root.after()"""
@@ -279,16 +260,21 @@ class IntegratedApp:
             # Create data service for popup DB operations
             self.data_service = PopupDataService(self.database)
             
+            # Create learning context
+            self.context = LearningContext(self.database)
+            self.context.active_session_id = self.data_service.get_active_session_id()
+            
             # Create the control panel (which will use data_service internally)
             self.control_panel = ControlPanel(
                 app_callback=self.launch_vocab_app,
                 ai_client=self.ai,
                 db=self.database,
-                data_service=self.data_service
+                data_service=self.data_service,
+                context=self.context
             )
             
             # Create save manager for word save workflow (prompts user for translation)
-            self.save_manager = PopupSaveManager(self.data_service, parent_widget=self.control_panel.root)
+            self.save_manager = PopupSaveManager(self.data_service, parent_widget=self.control_panel.root, context=self.context)
             
             # Set the callback for generating explanations when clipboard is clicked
             self.control_panel.generate_callback = self._generate_for_word
