@@ -255,6 +255,27 @@ class ChainViewer(ctk.CTkToplevel):
         except Exception as e:
             print(f"Error opening chain viewer: {e}")
     
+    def _show_graph_view(self):
+        """Show chain as a simple text graph"""
+        if not self.backward_chain_data:
+            return
+        
+        # Clear content
+        for widget in self.content_frame.winfo_children():
+            widget.destroy()
+        
+        # Create text graph
+        graph_text = ctk.CTkTextbox(self.content_frame, wrap="none", font=("Consolas", 10))
+        graph_text.pack(fill="both", expand=True)
+        
+        lines = []
+        for i, node in enumerate(self.backward_chain_data):
+            prefix = "└─ " if i == len(self.backward_chain_data) - 1 else "├─ "
+            lines.append(f"{prefix}[{node['node_type'][:8]}] {node.get('title', 'Untitled')[:40]}")
+        
+        graph_text.insert("1.0", "\n".join(lines))
+        graph_text.configure(state="disabled")
+
     def _lookup_word(self, word: str):
         """Trigger word lookup in main app"""
         self.status_label.configure(text=f"Looking up: {word}")

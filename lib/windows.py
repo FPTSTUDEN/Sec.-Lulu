@@ -9,6 +9,8 @@ from PIL import Image, ImageTk
 import random
 from datetime import datetime
 from lib.sentence_explorer import SentenceExplorerFrame
+from lib.debug_utils import DebugLogger
+import time
 
 MODES=["Lookup Only","Sparkle Notes","Immersion Mode", "Word Blossom", "Sentence Whisper"]
 
@@ -118,7 +120,7 @@ class PopupDataService:
             self.db.add_word_to_session(session_id, word_id)
         return word_id
     
-    def save_explanation_as_content(self, title, content, session_id=None, parent_node_id=None):
+    def save_explanation_as_content(self, title, content, session_id=None, parent_node_id=None, metadata=None):
         """Store explanation as content node. Returns node_id or None if no DB."""
         if not self.db:
             return None
@@ -129,7 +131,7 @@ class PopupDataService:
             title=title,
             parent_node_id=parent_node_id,
             session_id=session_id,
-            metadata={"source": "popup_explanation"}
+            metadata=metadata or {"source": "popup_explanation"}
         )
     
     def record_word_occurrence(self, word, content_node_id, position_start=0, position_end=None):
@@ -417,12 +419,13 @@ class LookupPanel(customtkinter.CTkFrame):
                            word_index=self.word_index, char_def_index=self.char_def_index, word_click_callback=None).show()
 
     def _show_word_mode_popup(self, word, parent_node_id=None, data_service=None, db=None, session_id=None):
-        """Show word mode popup with chain tracking
+        """Show word mode popup with chain tracking"""
         
-        Args:
-            data_service: PopupDataService instance (preferred over raw db)
-            db: (deprecated) Use data_service instead
-        """
+        # Use the current popup's node as parent if available
+        if parent_node_id is None and hasattr(self, 'parent_node_id'):
+            parent_node_id = self.parent_node_id
+            print(f"🔗 Using LookupPanel parent_node_id: {parent_node_id}")
+        
         popup = ctk.CTkToplevel(self)
         popup.geometry("400x250")
         popup.title(f"Select Mode for '{word}'")
@@ -437,30 +440,32 @@ class LookupPanel(customtkinter.CTkFrame):
         button_frame = ctk.CTkFrame(popup, fg_color="transparent")
         button_frame.pack(pady=10, padx=20, fill="x")
         
-        # Use provided data_service or fall back to instance data_service, or create from db
         service = data_service or self.data_service
         if not service and db:
             service = PopupDataService(db)
         
         def on_select():
+            print(f"🔗 LookupPanel: Selected word '{word}' with mode '{mode_var.get()}', parent_node_id={parent_node_id}")
+            
             # Create a content node for this word lookup if service available
             node_for_chain = None
-            if service and service.db and (parent_node_id or self.parent_node_id):
+            if service and service.db and parent_node_id:
                 node_for_chain = service.save_explanation_as_content(
                     title=f"Lookup: {word}",
                     content=word,
                     session_id=session_id,
-                    parent_node_id=parent_node_id or self.parent_node_id
+                    parent_node_id=parent_node_id,
+                    metadata={"source": "lookup_panel", "mode": mode_var.get()}
                 )
                 # Record word occurrence
                 if node_for_chain:
                     service.record_word_occurrence(word, node_for_chain, 0, len(word))
+                    print(f"✓ Created lookup node {node_for_chain} with parent {parent_node_id}")
             
             # If generate_explanation_callback is available, use it for full AI response
-            # Pass the selected mode to the callback
             if self.generate_explanation_callback:
-                # Pass both the word and the selected mode
-                self.generate_explanation_callback(word, mode_var.get())
+                # Pass the word, mode, AND the node we just created as parent
+                self.generate_explanation_callback(word, mode_var.get(), parent_node_id=node_for_chain)
             else:
                 # Fallback to static word click
                 self.word_click_callback(word, mode_var.get())
@@ -471,10 +476,11 @@ class LookupPanel(customtkinter.CTkFrame):
         ctk.CTkButton(button_frame, text="✕ Cancel", fg_color="#942626", command=popup.destroy).pack(side="left", padx=5, expand=True)
         
         # Chain info if available
-        if (parent_node_id or self.parent_node_id) and service and service.db:
-            chain_info = ctk.CTkLabel(popup, text=f"🔗 This lookup will be linked to existing content", 
+        if parent_node_id and service and service.db:
+            chain_info = ctk.CTkLabel(popup, text=f"🔗 This lookup will be linked to existing content (parent: {parent_node_id})", 
                                     font=ctk.CTkFont(size=10), text_color="green")
             chain_info.pack(pady=5)
+
 class ThinkBox(customtkinter.CTkFrame):
     """Reusable collapsible thinking box component."""
     def __init__(self, master, **kwargs):
@@ -601,6 +607,162 @@ class ControlPanel:
         self.root.bind("<Configure>", self._on_root_configure)
         self.advanced_visible = False
 
+        self.debug_btn = ctk.CTkButton(self.buttons_frame, text="🐛 Debug", width=50, command=self.show_debug_console)
+        self.debug_btn.pack(side="left", padx=5)
+        
+        self.debug_console = None
+        self.debug_logs = []
+
+        self.chain_viewer_btn = ctk.CTkButton(self.top_line_frame, text="🔗", width=30, command=self.show_chain_selector)
+        self.chain_viewer_btn.pack(side="right", padx=2)
+    
+    def show_chain_selector(self):
+        """Show a window to select a node and view its chain"""
+        if not self.db:
+            popup_message("No Database", "Database not available", parent=self.root)
+            return
+        
+        # Get recent nodes
+        cursor = self.db._get_cursor()
+        cursor.execute("""
+            SELECT id, node_type, title, created_at 
+            FROM content_nodes 
+            ORDER BY created_at DESC 
+            LIMIT 20
+        """)
+        nodes = cursor.fetchall()
+        
+        if not nodes:
+            popup_message("No Nodes", "No content nodes found", parent=self.root)
+            return
+        
+        selector = ctk.CTkToplevel(self.root)
+        selector.title("Select Node to View Chain")
+        selector.geometry("600x400")
+        selector.attributes("-topmost", True)
+        
+        ctk.CTkLabel(selector, text="Recent Content Nodes", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=10)
+        
+        list_frame = ctk.CTkScrollableFrame(selector)
+        list_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        for node in nodes:
+            node_id, node_type, title, created_at = node
+            date_str = datetime.fromtimestamp(created_at).strftime('%H:%M:%S')
+            
+            item_frame = ctk.CTkFrame(list_frame)
+            item_frame.pack(fill="x", pady=2)
+            
+            ctk.CTkLabel(item_frame, text=f"[{date_str}]", width=80, text_color="gray").pack(side="left", padx=5)
+            ctk.CTkLabel(item_frame, text=f"{node_type[:8]}", width=100, font=ctk.CTkFont(weight="bold")).pack(side="left", padx=5)
+            ctk.CTkLabel(item_frame, text=title[:40] if title else "-", width=250).pack(side="left", padx=5)
+            
+            def view(nid=node_id):
+                from lib.chain_viewer import ChainViewer
+                viewer = ChainViewer(selector, self.db, nid, f"Content Chain - Node {nid}")
+                viewer.focus()
+            
+            ctk.CTkButton(item_frame, text="View Chain", width=100, command=view).pack(side="right", padx=5)
+
+    def show_debug_console(self):
+        """Show debug console window"""
+        if self.debug_console and self.debug_console.winfo_exists():
+            self.debug_console.lift()
+            return
+        
+        self.debug_console = ctk.CTkToplevel(self.root)
+        self.debug_console.title("Debug Console - Chain Events")
+        self.debug_console.geometry("800x400")
+        self.debug_console.attributes("-topmost", True)
+        
+        # Text widget for logs
+        self.debug_text = ctk.CTkTextbox(self.debug_console, wrap="word", font=("Consolas", 10))
+        self.debug_text.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        # Buttons
+        btn_frame = ctk.CTkFrame(self.debug_console, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=10, pady=(0, 10))
+        
+        ctk.CTkButton(btn_frame, text="Clear", command=self._clear_debug_console).pack(side="left", padx=5)
+        ctk.CTkButton(btn_frame, text="Test Chain", command=self._test_chain_creation).pack(side="left", padx=5)
+        ctk.CTkButton(btn_frame, text="Show Last Node", command=self._show_last_node_chain).pack(side="left", padx=5)
+        
+        # Display existing logs
+        for log in self.debug_logs:
+            self.debug_text.insert("end", log + "\n")
+        self.debug_text.see("end")
+    
+    def _clear_debug_console(self):
+        self.debug_text.delete("1.0", "end")
+        self.debug_logs.clear()
+    
+    def _test_chain_creation(self):
+        """Create a test chain to verify functionality"""
+        if not self.db:
+            self._add_debug_log("❌ No database available for test")
+            return
+        
+        self._add_debug_log("=" * 60)
+        self._add_debug_log("🧪 TEST: Creating test chain")
+        
+        # Create root node
+        root_id = self.db.create_content_node(
+            node_type='raw_text',
+            content="Test root content",
+            title="Test Root",
+            session_id=self.data_service.get_active_session_id()
+        )
+        self._add_debug_log(f"✓ Created root node: {root_id}")
+        
+        # Create child node
+        child_id = self.db.create_content_node(
+            node_type='response',
+            content="Test child response",
+            title="Test Child",
+            parent_node_id=root_id,
+            session_id=self.data_service.get_active_session_id()
+        )
+        self._add_debug_log(f"✓ Created child node: {child_id}")
+        
+        # Verify chain
+        chain = self.db.get_content_chain(child_id)
+        self._add_debug_log(f"Chain length: {len(chain)}")
+        for i, node in enumerate(chain):
+            self._add_debug_log(f"  [{i}] id={node['id']}, type={node['node_type']}")
+        
+        self._add_debug_log("=" * 60)
+    def _show_last_node_chain(self):
+        """Show the content chain for the last created node in debug console"""
+        if not self.db:
+            self._add_debug_log("❌ No database available to show chain")
+            return
+        
+        last_node_id = None
+        try:
+            last_node_id = self.db.get_last_content_node_id()
+        except Exception as e:
+            self._add_debug_log(f"❌ Error fetching last node: {e}")
+            return
+        
+        if not last_node_id:
+            self._add_debug_log("⚠️ No content nodes found in database")
+            return
+        
+        self._add_debug_log(f"🔍 Fetching chain for last node id: {last_node_id}")
+        try:
+            chain = self.db.get_content_chain(last_node_id)
+            self._add_debug_log(f"Chain length: {len(chain)}")
+            for i, node in enumerate(chain):
+                self._add_debug_log(f"  [{i}] id={node['id']}, type={node['node_type']}, title={node['title']}")
+        except Exception as e:
+            self._add_debug_log(f"❌ Error fetching chain: {e}")
+    def _add_debug_log(self, message):
+        timestamp = time.strftime("%H:%M:%S")
+        log_entry = f"[{timestamp}] {message}"
+        self.debug_logs.append(log_entry)
+        if self.debug_console and self.debug_console.winfo_exists():
+            self.debug_text.insert("end", log_entry + "\n")
+            self.debug_text.see("end")
     def update_ai_status(self, status_text, color):
         self.status_text = status_text
         self.root.after(0, lambda: self._update_top_line(color=color))
@@ -895,6 +1057,9 @@ class Long_message_popup:
         self.long_popup.geometry("900x550")  # Increased height for button visibility
         self.long_popup.title(title)
         self.long_popup.attributes("-topmost", True)
+
+        self.debug = DebugLogger("Long_message_popup")
+        self.debug.debug(f"Creating popup: title='{title}', parent_node_id={parent_node_id}, session_id={session_id}")
         
         # Support both new (data_service) and old (db) API; prefer data_service
         if data_service:
@@ -909,6 +1074,10 @@ class Long_message_popup:
         self.parent_node_id = parent_node_id
         self.current_node_id = None
         self.generate_explanation_callback = generate_explanation_callback
+        self.current_query_node_id = None  # Track current query node
+        self.current_response_node_id = None  # Track current response node
+        self.control_panel = master if hasattr(master, 'root') else getattr(master, 'control_panel', None)
+
 
         customtkinter.CTkLabel(self.long_popup, text=title, font=("Mengshen-Handwritten", 24, "bold")).pack(pady=(5, 5))
         
@@ -966,7 +1135,139 @@ class Long_message_popup:
             chain_btn = ctk.CTkButton(self.long_popup, text="🔗 View Chain", width=100,
                                     command=self._view_chain)
             chain_btn.pack(side="bottom", pady=5)
+        
+        if self.data_service and self.data_service.db:
+            self.debug.debug("Storing popup content as node...")
+            node_id = self.store_as_content_node()
+            if node_id:
+                self.debug.info(f"Popup stored as node {node_id}")
+                self.debug.debug(f"Chain for node {node_id}:")
+                # Print chain from DB
+                if self.data_service.db:
+                    self.data_service.db.debug_print_chain(node_id)
+            else:
+                self.debug.warning("Failed to store popup as content node")
+        self.long_popup.bind("<Control-d>", lambda e: self._debug_current_chain())
 
+        if self.data_service and self.data_service.db and parent_node_id:
+            chain_frame = ctk.CTkFrame(self.long_popup, fg_color="transparent")
+            chain_frame.pack(side="bottom", fill="x", padx=10, pady=5)
+            
+            chain_status = ctk.CTkLabel(chain_frame, 
+                text=f"🔗 Chained to parent: {parent_node_id}", 
+                font=ctk.CTkFont(size=10), 
+                text_color="green")
+            chain_status.pack(side="left", padx=5)
+            
+            view_chain_btn = ctk.CTkButton(chain_frame, text="View Chain", width=80, height=25,
+                                          command=self._view_chain)
+            view_chain_btn.pack(side="right", padx=5)
+
+    def _generate_for_word(self, text, mode=None, parent_node_id=None):
+        """Generate explanation for a word and display in popup.
+        
+        Args:
+            text: The word to explain
+            mode: (optional) Response mode
+            parent_node_id: Parent content node ID for chain tracking
+        """
+        # Temporarily set control panel response mode if specified
+        original_mode = None
+        if mode and self.control_panel:
+            original_mode = self.control_panel.response_mode
+            self.control_panel.response_mode = mode
+        
+        # Create a query node for this lookup
+        query_node_id = None
+        if self.data_service and self.data_service.db:
+            # Store the query as a content node
+            query_node_id = self.data_service.save_explanation_as_content(
+                title=f"Query: {text}",
+                content=text,
+                session_id=self.data_service.get_active_session_id(),
+                parent_node_id=parent_node_id,
+                metadata={"source": "clipboard_query", "mode": mode or self.control_panel.response_mode}
+            )
+            self.current_query_node_id = query_node_id
+            print(f"📝 Created query node: {query_node_id} for text: {text}")
+            
+            # Record word occurrence
+            if query_node_id:
+                self.data_service.record_word_occurrence(text, query_node_id, 0, len(text))
+        
+        try:
+            explanation = self.get_explanation(text)
+            # Wrap string explanation in a generator if needed
+            if isinstance(explanation, str):
+                explanation = (explanation,)
+            
+            # Pass the query node as parent for the response
+            self._show_explanation_popup(text, explanation, parent_node_id=query_node_id)
+        finally:
+            # Restore original mode if we changed it
+            if original_mode and self.control_panel:
+                self.control_panel.response_mode = original_mode
+
+    
+    def _show_explanation_popup(self, text, explanation_generator, parent_node_id=None):
+        """Handles the streaming update of the popup UI."""
+        
+        # Get parent node ID - use passed param or from control panel
+        effective_parent_id = parent_node_id or getattr(self.control_panel, 'current_response_node_id', None)
+        
+        print(f"🔗 Creating popup with parent_node_id={effective_parent_id} for text='{text}'")
+        
+        response_popup = Long_message_popup(
+            "Explanation",
+            text,
+            master=self.control_panel,
+            display_image=(self.control_panel.response_mode.lower() != "lookup only"),
+            word_index=self.word_index,
+            char_def_index=self.char_def_index,
+            data_service=self.data_service,
+            session_id=self.data_service.get_active_session_id() if self.data_service else None,
+            parent_node_id=effective_parent_id,  # Now using the query node as parent!
+            generate_explanation_callback=self._generate_for_word
+        )
+        
+        def stream_thread():
+            full_explanation = ""
+            try:
+                for chunk in explanation_generator:
+                    # Route thinking-marked chunks to the think box
+                    if isinstance(chunk, str) and chunk.startswith("__THINK__"):
+                        thinking = chunk[len("__THINK__"):]
+                        full_explanation += thinking
+                        self.control_panel.root.after(0, lambda t=thinking: response_popup.append_think(t))
+                    else:
+                        full_explanation += chunk
+                        # Update the UI on the main thread
+                        self.control_panel.root.after(0, lambda c=chunk: response_popup.append_text(c))
+
+                # Once finished, enable the save button with PopupSaveManager
+                self.control_panel.root.after(0, lambda: self._setup_save_button(response_popup, text, full_explanation))
+                
+                # Debug: Print the chain after popup is created
+                if self.data_service and self.data_service.db and response_popup.current_node_id:
+                    print(f"\n🔗 CHAIN DEBUG for response node {response_popup.current_node_id}:")
+                    self.data_service.db.debug_print_chain(response_popup.current_node_id)
+            except Exception as e:
+                print(f"Streaming error: {e}")
+
+        threading.Thread(target=stream_thread, daemon=True).start()
+        response_popup.show()
+
+    def _debug_current_chain(self):
+        """Debug the current popup's chain"""
+        if not self.current_node_id:
+            self.store_as_content_node()
+        
+        if self.current_node_id and self.data_service and self.data_service.db:
+            self.data_service.db.debug_print_chain(self.current_node_id)
+            
+            # Show message
+            popup_message("Debug", f"Chain info printed to console for node {self.current_node_id}", parent=self.long_popup)
+            
     def add_button(self, text, command):
         """Add button to popup with proper layout (visible at bottom)."""
         btn = customtkinter.CTkButton(self.long_popup, text=text, command=command)
@@ -982,12 +1283,16 @@ class Long_message_popup:
         self.text_box.see("end")
     def store_as_content_node(self):
         """Store this popup's content as a content node in the database"""
+        self.debug.debug(f"Storing as content node: title={self.long_popup.title()}")
+        
         if not self.data_service or not self.data_service.db:
+            self.debug.warning("No data_service or db available")
             return None
         
         node_type = 'response'
         title = self.long_popup.title()
         content = self.text_box.get("1.0", "end-1c")
+        self.debug.debug(f"Content length: {len(content)} chars")
         
         node_id = self.data_service.save_explanation_as_content(
             title=title,
@@ -996,16 +1301,20 @@ class Long_message_popup:
             parent_node_id=self.parent_node_id
         )
         self.current_node_id = node_id
+        self.lookup_panel.parent_node_id = node_id  # Update lookup panel with new node ID for word occurrence tracking
+        self.debug.info(f"Stored as node {node_id}, parent was {self.parent_node_id}")
         
         # Record word occurrences in content
         if node_id:
             import re
             chinese_words = set(re.findall(r'[\u4e00-\u9fff]{2,}', content))
+            self.debug.debug(f"Found {len(chinese_words)} Chinese words in content")
             for word in chinese_words:
+                self.debug.debug(f"  Recording occurrence: '{word}'")
                 self.data_service.record_word_occurrence(word, node_id)
         
         return node_id
-
+    
     def _view_chain(self):
         """Open chain viewer for this content"""
         if not self.data_service or not self.data_service.db:

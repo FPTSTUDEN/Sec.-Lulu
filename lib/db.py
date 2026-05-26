@@ -10,8 +10,9 @@ import threading
 from typing import List, Tuple, Optional, Dict
 from datetime import datetime, timedelta
 import json
+from lib.debug_utils import DEBUG_MODE, DebugLogger, trace_chain
 
-
+DEBUG_MODE = False  # Set to True to enable detailed debug output
 class VocabDatabase:
     """
     Unified interface for all vocabulary database operations.
@@ -19,16 +20,26 @@ class VocabDatabase:
     """
     
     def __init__(self, db_path: str = "vocab.db"):
-        """Initialize database path and create local storage."""
         self.db_path = db_path
         self._local = threading.local()
+        self._debug = DebugLogger("VocabDatabase")
+        self._debug.info(f"Database initialized: {db_path}")
         self._init_schema()
     
     def _get_connection(self):
-        """Get thread-local database connection."""
+        """Get thread-local database connection with query logging."""
         if not hasattr(self._local, 'conn') or self._local.conn is None:
             self._local.conn = sqlite3.connect(self.db_path)
             self._local.conn.row_factory = sqlite3.Row
+            
+            # Enable query logging in debug mode
+            if DEBUG_MODE:
+                def trace_query(sql, params=()):
+                    self._debug.debug(f"SQL: {sql}")
+                    if params:
+                        self._debug.debug(f"Params: {params}")
+                self._local.conn.set_trace_callback(trace_query)
+        
         return self._local.conn
     
     def _get_cursor(self):
@@ -641,24 +652,81 @@ class VocabDatabase:
         } for r in cursor.fetchall()]
     # ===== CONTENT CHAIN METHODS =====
 
+    def debug_print_chain(self, node_id: int):
+        """Print detailed chain information for debugging"""
+        self._debug.debug(f"=" * 60)
+        self._debug.debug(f"CHAIN DEBUG for node_id={node_id}")
+        
+        # Get node
+        node = self.get_content_node(node_id)
+        if not node:
+            self._debug.error(f"Node {node_id} not found!")
+            return
+        
+        self._debug.debug(f"Node: type={node['node_type']}, title={node.get('title', 'N/A')[:50]}")
+        self._debug.debug(f"Path JSON: {node.get('path_json', 'None')}")
+        
+        # Parse path
+        path_ids = []
+        if node.get('path_json'):
+            try:
+                path_ids = json.loads(node['path_json'])
+                self._debug.debug(f"Parsed path IDs: {path_ids}")
+            except:
+                self._debug.error(f"Failed to parse path_json: {node['path_json']}")
+        
+        # Get ancestors
+        self._debug.debug(f"Ancestors count: {len(path_ids)}")
+        for i, aid in enumerate(reversed(path_ids)):
+            ancestor = self.get_content_node(aid)
+            if ancestor:
+                self._debug.debug(f"  Ancestor {i}: id={aid}, type={ancestor['node_type']}, title={ancestor.get('title', 'N/A')[:40]}")
+            else:
+                self._debug.warning(f"  Ancestor {i}: id={aid} NOT FOUND!")
+        
+        # Get children
+        children = self.get_node_children(node_id)
+        self._debug.debug(f"Children count: {len(children)}")
+        for child in children:
+            self._debug.debug(f"  Child: id={child['id']}, type={child['node_type']}, title={child.get('title', 'N/A')[:40]}")
+        
+        # Check edges
+        cursor = self._get_cursor()
+        cursor.execute("""
+            SELECT from_node_id, to_node_id, edge_type, created_at 
+            FROM content_edges 
+            WHERE from_node_id=? OR to_node_id=?
+            ORDER BY created_at
+        """, (node_id, node_id))
+        edges = cursor.fetchall()
+        self._debug.debug(f"Edges involving node: {len(edges)}")
+        for edge in edges:
+            self._debug.debug(f"  Edge: {edge[0]} -> {edge[1]} ({edge[2]}) at {edge[3]}")
+        
+        self._debug.debug(f"=" * 60)
+    
+    @trace_chain
     def create_content_node(self, node_type: str, content: str, title: str = None,
                             parent_node_id: int = None, session_id: str = None,
                             metadata: Dict = None, source_text_id: str = None) -> int:
-        """
-        Create a content node with automatic JSON path building.
-        Returns node_id.
-        """
+        """Create a content node with automatic JSON path building."""
+        self._debug.debug(f"Creating content node: type={node_type}, parent={parent_node_id}, title={title[:50] if title else 'None'}")
+        
         now = int(time.time())
         cursor = self._get_cursor()
         
         # Build path JSON from parent
         path_json = "[]"
         if parent_node_id:
+            self._debug.debug(f"Building path from parent {parent_node_id}")
             cursor.execute("SELECT path_json FROM content_nodes WHERE id = ?", (parent_node_id,))
             row = cursor.fetchone()
             if row:
                 parent_path = json.loads(row[0]) if row[0] else []
                 path_json = json.dumps(parent_path + [parent_node_id])
+                self._debug.debug(f"Parent path: {parent_path} -> New path: {path_json}")
+            else:
+                self._debug.warning(f"Parent node {parent_node_id} not found!")
         
         metadata_json = json.dumps(metadata) if metadata else None
         
@@ -668,14 +736,19 @@ class VocabDatabase:
         """, (node_type, content[:5000], title, metadata_json, path_json, session_id, source_text_id, now))
         
         node_id = cursor.lastrowid
+        self._debug.info(f"Created node {node_id}: type={node_type}")
         self._get_connection().commit()
         
         # Create edge to parent if parent exists
         if parent_node_id:
+            self._debug.debug(f"Creating edge from {parent_node_id} -> {node_id}")
             self.create_content_edge(parent_node_id, node_id, 'triggered_by')
         
+        # Debug: Print the chain after creation
+        self.debug_print_chain(node_id)
+        
         return node_id
-
+    
     def create_content_edge(self, from_node_id: int, to_node_id: int, edge_type: str,
                             position_start: int = None, position_end: int = None, weight: float = 1.0) -> int:
         """Create a directed edge between two content nodes."""
@@ -710,30 +783,52 @@ class VocabDatabase:
             "created_at": row[8]
         }
 
+    @trace_chain
     def get_content_chain(self, node_id: int, max_depth: int = 10) -> List[Dict]:
-        """
-        Get the full chain of ancestors for a node using JSON path.
-        This is O(depth) - very fast!
-        """
+        """Get the full chain of ancestors for a node using JSON path."""
+        self._debug.debug(f"Getting content chain for node {node_id}")
+        
         node = self.get_content_node(node_id)
         if not node:
+            self._debug.warning(f"Node {node_id} not found")
             return []
         
         chain = [node]
         
         # Parse the path JSON to get ancestor IDs
-        path_ids = json.loads(node['path_json']) if node['path_json'] else []
+        path_ids = []
+        if node.get('path_json'):
+            try:
+                path_ids = json.loads(node['path_json'])
+                self._debug.debug(f"Path IDs from JSON: {path_ids} (length={len(path_ids)})")
+            except json.JSONDecodeError as e:
+                self._debug.error(f"Failed to parse path_json: {e}, value={node['path_json']}")
         
         # Fetch ancestors in reverse order (oldest first)
+        ancestors_found = 0
         for ancestor_id in reversed(path_ids):
+            self._debug.debug(f"Fetching ancestor {ancestor_id}")
             ancestor = self.get_content_node(ancestor_id)
             if ancestor:
                 chain.insert(0, ancestor)
+                ancestors_found += 1
+                self._debug.debug(f"  Added ancestor: id={ancestor_id}, type={ancestor['node_type']}")
+            else:
+                self._debug.warning(f"  Ancestor {ancestor_id} not found in database!")
+        
+        self._debug.info(f"Chain for node {node_id}: {len(chain)} nodes total ({ancestors_found} ancestors + current)")
+        
+        # Log chain summary
+        for i, node_in_chain in enumerate(chain):
+            self._debug.debug(f"  Chain[{i}]: id={node_in_chain['id']}, type={node_in_chain['node_type']}, title={node_in_chain.get('title', 'N/A')[:40]}")
         
         return chain
-
+    
+    @trace_chain
     def get_node_children(self, node_id: int, edge_type: str = None) -> List[Dict]:
         """Get children nodes (what this node led to)."""
+        self._debug.debug(f"Getting children for node {node_id}, edge_type={edge_type}")
+        
         cursor = self._get_cursor()
         query = """
             SELECT cn.* FROM content_nodes cn
@@ -751,15 +846,20 @@ class VocabDatabase:
         
         children = []
         for row in rows:
-            children.append({
+            child = {
                 "id": row[0],
                 "node_type": row[1],
                 "content": row[2],
                 "title": row[3],
                 "created_at": row[8]
-            })
+            }
+            children.append(child)
+            self._debug.debug(f"  Child found: id={child['id']}, type={child['node_type']}")
+        
+        self._debug.info(f"Found {len(children)} children for node {node_id}")
         return children
-
+    
+    @trace_chain
     def record_word_occurrence(self, word_id: str, content_node_id: int,
                             position_start: int, position_end: int,
                             context_before: str = "", context_after: str = ""):
@@ -841,6 +941,14 @@ class VocabDatabase:
         # Sort by strength
         sorted_words = sorted(related_words.items(), key=lambda x: x[1], reverse=True)
         return [{"word": w, "strength": s} for w, s in sorted_words[:10]]
+
+    def get_last_content_node_id(self) -> Optional[int]:
+        """Get the ID of the most recently created content node."""
+        cursor = self._get_cursor()
+        cursor.execute("SELECT id FROM content_nodes ORDER BY created_at DESC LIMIT 1")
+        row = cursor.fetchone()
+        return row[0] if row else None
+
     def __enter__(self):
         return self
     

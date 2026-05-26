@@ -123,12 +123,12 @@ class IntegratedApp:
         finally:
             db.close()
     
-    def _show_explanation_popup(self, text, explanation_generator):
+    def _show_explanation_popup(self, text, explanation_generator, parent_node_id=None):
         """Handles the streaming update of the popup UI."""
         
         # Create the popup with data service for DB operations
-        # Get parent node ID from control panel if available
-        parent_node_id = getattr(self.control_panel, 'current_response_node_id', None)
+        # Use passed parent_node_id, fallback to control panel tracking
+        effective_parent_id = parent_node_id or getattr(self.control_panel, 'current_response_node_id', None)
         
         response_popup = Long_message_popup(
             "Explanation",
@@ -139,9 +139,10 @@ class IntegratedApp:
             char_def_index=self.char_def_index,
             data_service=self.data_service,
             session_id=self.data_service.get_active_session_id() if self.data_service else None,
-            parent_node_id=parent_node_id,
+            parent_node_id=effective_parent_id,
             generate_explanation_callback=self._generate_for_word
         )
+        # ... rest stays the same
         
         def stream_thread():
             full_explanation = ""
@@ -180,13 +181,13 @@ class IntegratedApp:
             
         popup.add_button("💾 Save/Update word", save_logic)
     
-    def _generate_for_word(self, text, mode=None):
+    def _generate_for_word(self, text, mode=None, parent_node_id=None):
         """Generate explanation for a word and display in popup.
         
         Args:
             text: The word to explain
             mode: (optional) Response mode. If provided, temporarily override control_panel mode.
-                  Used for chained popups when user selects a specific mode.
+            parent_node_id: (optional) Parent content node ID for chain tracking
         """
         # Temporarily set control panel response mode if specified (for chained responses)
         original_mode = None
@@ -199,7 +200,7 @@ class IntegratedApp:
             # Wrap string explanation in a generator if needed
             if isinstance(explanation, str):
                 explanation = (explanation,)
-            self._show_explanation_popup(text, explanation)
+            self._show_explanation_popup(text, explanation, parent_node_id=parent_node_id)
         finally:
             # Restore original mode if we changed it
             if original_mode and self.control_panel:
