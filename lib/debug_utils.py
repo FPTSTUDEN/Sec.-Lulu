@@ -6,7 +6,7 @@ from datetime import datetime
 import json
 
 # Configure debug logging
-DEBUG_MODE = True  # Set to False to disable debug output
+DEBUG_MODE = False  # Set to False to disable debug output
 
 class DebugLogger:
     def __init__(self, name):

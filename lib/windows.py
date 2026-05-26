@@ -1143,8 +1143,8 @@ class Long_message_popup:
                 self.debug.info(f"Popup stored as node {node_id}")
                 self.debug.debug(f"Chain for node {node_id}:")
                 # Print chain from DB
-                if self.data_service.db:
-                    self.data_service.db.debug_print_chain(node_id)
+                # if self.data_service.db:
+                #     self.data_service.db.debug_print_chain(node_id)
             else:
                 self.debug.warning("Failed to store popup as content node")
         self.long_popup.bind("<Control-d>", lambda e: self._debug_current_chain())
@@ -1248,9 +1248,9 @@ class Long_message_popup:
                 self.control_panel.root.after(0, lambda: self._setup_save_button(response_popup, text, full_explanation))
                 
                 # Debug: Print the chain after popup is created
-                if self.data_service and self.data_service.db and response_popup.current_node_id:
-                    print(f"\n🔗 CHAIN DEBUG for response node {response_popup.current_node_id}:")
-                    self.data_service.db.debug_print_chain(response_popup.current_node_id)
+                # if self.data_service and self.data_service.db and response_popup.current_node_id:
+                #     print(f"\n🔗 CHAIN DEBUG for response node {response_popup.current_node_id}:")
+                #     self.data_service.db.debug_print_chain(response_popup.current_node_id)
             except Exception as e:
                 print(f"Streaming error: {e}")
 
@@ -1262,11 +1262,11 @@ class Long_message_popup:
         if not self.current_node_id:
             self.store_as_content_node()
         
-        if self.current_node_id and self.data_service and self.data_service.db:
-            self.data_service.db.debug_print_chain(self.current_node_id)
+        # if self.current_node_id and self.data_service and self.data_service.db:
+        #     self.data_service.db.debug_print_chain(self.current_node_id)
             
-            # Show message
-            popup_message("Debug", f"Chain info printed to console for node {self.current_node_id}", parent=self.long_popup)
+        #     # Show message
+        #     popup_message("Debug", f"Chain info printed to console for node {self.current_node_id}", parent=self.long_popup)
             
     def add_button(self, text, command):
         """Add button to popup with proper layout (visible at bottom)."""
