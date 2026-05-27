@@ -1,29 +1,29 @@
 """
 Integrated application combining ControlPanel and Vocabulary Learning App
-Properly handles multiple Tkinter event loops without blocking
 """
 
 import os
 import threading
 import pyperclip
 import time
-from lib.windows import ControlPanel, App, Long_message_popup, PopupDataService, PopupSaveManager, LearningContext
+from lib.windows import ControlPanel, App, PopupDataService, PopupSaveManager
+from lib.streaming_popup import StreamingPopup
+from lib.chain import ChainManager
 from lib.reviewer import WordReviewer
 from lib.db import VocabDatabase
 from lib.learner_prompts import prompt_generator_for_mode
 from lib.localai import OllamaClient
-from lib.ccedict import load_cedict_entries, lookup_cedict
+from lib.ccedict import load_cedict_entries
 from lib.async_utils import run_async
 from mock_database_generator import MockDatabaseGenerator
 
 MAX_CLIPBOARD_TEXT_LEN = 180
 
-# Load CEDICT entries and build indices at startup
+# Load CEDICT entries
 _, word_index, char_index, char_def_index = load_cedict_entries("cedict_ts.u8")
 
+
 class IntegratedApp:
-    """Main application that coordinates ControlPanel and VocabApp"""
-    
     def __init__(self, db_path="vocab.db", use_mock=False):
         if use_mock and db_path == "vocab.db":
             db_path = "mock_vocab.db"
@@ -31,7 +31,7 @@ class IntegratedApp:
         self.db_path = db_path
         self.use_mock = use_mock
         self.database = None
-        self.context = None
+        self.chain_mgr = None
         self.db_cls = MockDatabaseGenerator if use_mock else VocabDatabase
         self.reviewer = WordReviewer(db_path, db_cls=self.db_cls)
         self.app_window = None
@@ -40,7 +40,6 @@ class IntegratedApp:
         self.control_panel = None
         self.ai = OllamaClient()
         self.word_index = word_index
-        self.char_index = char_index
         self.char_def_index = char_def_index
         self.data_service = None
         self.save_manager = None
@@ -59,7 +58,8 @@ class IntegratedApp:
         try:
             reviewer = WordReviewer(self.db_path, db_cls=self.db_cls)
             db = self.db_cls(self.db_path)
-            self.app_window = App(reviewer, ai_client=self.ai, db=db, control_panel=self.control_panel, context=self.context)
+            self.app_window = App(reviewer, ai_client=self.ai, db=db, 
+                                  control_panel=self.control_panel, context=self.chain_mgr)
             self.app_window.mainloop()
         except Exception as e:
             print(f"Error launching app: {e}")
@@ -68,98 +68,41 @@ class IntegratedApp:
         finally:
             self.app_window = None
     
-    def get_explanation_generator(self, text):
-        """Returns a generator function for streaming AI response."""
-        db = self.db_cls(self.db_path)
+    def _on_word_detected(self, word: str):
+        """Called when a Chinese word is detected in clipboard."""
+        print(f"\n{'='*50}")
+        print(f"📖 Word detected: {word}")
+        print(f"{'='*50}")
         
-        try:
-            wordid = db.get_word_id(text)
-            if wordid:
-                db.update_review(wordid, 3)
-                word_stats = db.get_word_stats(wordid)
-                frequency = word_stats.get("review_count", 1) if word_stats else 1
-            else:
-                frequency = 1
-            
-            if self.control_panel:
-                mode = self.control_panel.response_mode
-            else:
-                mode = "Sparkle Notes"
-
-            if mode == "Lookup Only":
-                word_match, char_matches = lookup_cedict(text, self.word_index, self.char_def_index)
-                if word_match:
-                    result = f"{word_match['simplified']} ({word_match['traditional']}), Definitions: {'; '.join(word_match['definitions'])}"
-                elif char_matches:
-                    char_info = []
-                    for char, entry in char_matches:
-                        char_info.append(f"{char}: {entry['simplified']} ({entry['traditional']}), Definitions: {'; '.join(entry['definitions'])}")
-                    result = f"No direct match for '{text}'. Character breakdown:\n" + "\n".join(char_info)
-                else:
-                    result = f"No direct match found for '{text}'."
-                
-                def single_chunk():
-                    yield result
-                return single_chunk
-
-            print(f"Generating {mode} explanation for '{text}'...")
-            base_prompt_fn = prompt_generator_for_mode(mode)
-            session_ctx = getattr(self.control_panel, 'session_context', '') if self.control_panel else ''
-            
-            def prompt_fn_with_session(t, f):
-                p = base_prompt_fn(t, f)
-                if session_ctx:
-                    return f"Session context: {session_ctx}\n\n{p}"
-                return p
-
-            display_thinking = getattr(self.control_panel, 'show_thinking', True)
-            
-            def generator():
-                return self.ai.generate_response(
-                    prompt_fn_with_session(text, frequency), 
-                    display_thinking
-                )
-            return generator
-        finally:
-            db.close()
-    
-    def _generate_for_word(self, text, mode=None, context=None):
-        original_mode = None
-        if mode and self.control_panel:
-            original_mode = self.control_panel.response_mode
-            self.control_panel.response_mode = mode
+        mode = self.control_panel.response_mode if self.control_panel else "Sparkle Notes"
+        print(f"   Mode: {mode}")
         
-        try:
-            generator_func = self.get_explanation_generator(text)
-            if context:
-                self.context = context
-            self._show_explanation_popup(text, generator_func)
-        finally:
-            if original_mode and self.control_panel:
-                self.control_panel.response_mode = original_mode
-    
-    def _show_explanation_popup(self, text, generator_func):
-        if not self.context:
-            self.context = LearningContext(self.database)
+        show_image = (mode.lower() != "lookup only")
         
-        response_popup = Long_message_popup(
-            "Explanation",
-            text,
-            master=self.control_panel,
-            display_image=(self.control_panel.response_mode.lower() != "lookup only"),
+        StreamingPopup(
+            word=word,
+            master=self.control_panel.root if self.control_panel else None,
+            chain_mgr=self.chain_mgr,
+            ai_client=self.ai,
+            mode=mode,
+            display_image=show_image,
             word_index=self.word_index,
             char_def_index=self.char_def_index,
             data_service=self.data_service,
-            context=self.context,
-            generate_explanation_callback=self._generate_for_word
+            on_save_callback=self._on_word_saved,
+            show_thinking=self.control_panel.show_thinking if self.control_panel else True
         )
-        
-        # Call generator_func to get the actual generator, then pass it
-        generator = generator_func()
-        response_popup.start_streaming(generator, text)
-        response_popup.show()
+    
+    def _on_word_saved(self, word: str, word_id: str):
+        """Called when a word is saved to vocabulary."""
+        print(f"✓ Word '{word}' saved with ID: {word_id}")
+        if self.control_panel and self.data_service:
+            session_id = self.data_service.get_active_session_id()
+            if session_id:
+                self.database.add_word_to_session(session_id, word_id)
     
     def _poll_clipboard(self):
+        """Poll clipboard for Chinese text."""
         if not self.control_panel or getattr(self.control_panel, "done", False):
             return
         
@@ -203,10 +146,7 @@ class IntegratedApp:
             self.control_panel.update_clipboard_display(current, is_chinese)
             
             if is_chinese:
-                print(f"\n{'='*50}")
-                print(f"Detected: {current}")
-                print(f"{'='*50}")
-                self._generate_for_word(current)
+                self._on_word_detected(current)
         
         self.control_panel.root.after(1000, self._poll_clipboard)
     
@@ -219,25 +159,31 @@ class IntegratedApp:
                 self.ai.manage_model("load")
             threading.Thread(target=preload_ai, daemon=True).start()
             
+            # Initialize database
             if self.database is None:
                 self.database = self.db_cls(self.db_path)
             
+            # Create data service
             self.data_service = PopupDataService(self.database)
             
-            self.context = LearningContext(self.database)
-            self.context.active_session_id = self.data_service.get_active_session_id()
+            # Create chain manager
+            active_session_id = self.data_service.get_active_session_id()
+            self.chain_mgr = ChainManager(self.database, session_id=active_session_id)
             
+            # Create control panel
             self.control_panel = ControlPanel(
                 app_callback=self.launch_vocab_app,
                 ai_client=self.ai,
                 db=self.database,
                 data_service=self.data_service,
-                context=self.context
+                context=self.chain_mgr
             )
             
-            self.save_manager = PopupSaveManager(self.data_service, parent_widget=self.control_panel.root, context=self.context)
+            # Create save manager
+            self.save_manager = PopupSaveManager(self.data_service, 
+                                                  parent_widget=self.control_panel.root, 
+                                                  context=self.chain_mgr)
             
-            self.control_panel.generate_callback = self._generate_for_word
             print("=" * 50)
             print("Integrated Vocabulary Learning System")
             print("=" * 50)
@@ -246,15 +192,16 @@ class IntegratedApp:
             print("Click 'Open Main App' to launch the vocabulary reviewer")
             print("=" * 50)
             
-            def update_ai_status():
-                self.control_panel.update_ai_status("Ready (GPU)", "green")
+            # Update AI status
+            self.control_panel.update_ai_status("Ready", "green")
             
-            # Use run_async for AI status update
-            run_async(self.control_panel.root, lambda: None, on_done=lambda _: update_ai_status())
-            
+            # Start clipboard polling
             self.control_panel.root.after(0, self._poll_clipboard)
+            
+            # Show control panel
             self.control_panel.show()
             
+            # Cleanup
             if self.app_thread and self.app_thread.is_alive():
                 print("Waiting for app to close...")
                 self.app_thread.join(timeout=5)
@@ -269,7 +216,6 @@ class IntegratedApp:
 
 def main():
     import argparse
-
     parser = argparse.ArgumentParser(description="Integrated vocab app")
     parser.add_argument("--use-mock", action="store_true",
                         help="Use the mock database implementation")

@@ -12,54 +12,27 @@ from lib.sentence_explorer import SentenceExplorerFrame
 from lib.debug_utils import DebugLogger
 import time
 
-MODES=["Lookup Only","Sparkle Notes","Immersion Mode", "Word Blossom", "Sentence Whisper"]
+# Import from ui_components
+from lib.ui_components import LookupPanel, ThinkBox, popup_message, MODES
 
-current_folder = os.path.dirname(os.path.abspath(__file__))
-repo_folder = os.path.dirname(current_folder)
-os.chdir(repo_folder)
+# Import async utilities
+from lib.async_utils import run_async, stream_to_widgets, set_widget_text, clear_widget
+
+# Import chain and streaming popup
+from lib.chain import ChainManager
+from lib.streaming_popup import StreamingPopup
+
 try:
     from lib.localai import OllamaClient
 except ImportError as e:
     from localai import OllamaClient
     print(f"Error importing OllamaClient: {e}")
+
 try:
     from lib.ccedict import lookup_cedict, extract_chinese_word_at_position, is_chinese_char
 except ImportError:
     lookup_cedict = extract_chinese_word_at_position = is_chinese_char = None
 
-# Import unified async utilities
-from lib.async_utils import run_async, stream_to_widgets, set_widget_text, clear_widget
-
-# ======================
-# Learning Context - Single source of truth for chain tracking
-# ======================
-
-class LearningContext:
-    """Single source of truth for current learning session state."""
-    def __init__(self, db=None):
-        self.db = db
-        self.active_node_id = None
-        self.active_session_id = None
-        self.current_mode = "Sparkle Notes"
-    
-    def create_child_node(self, node_type, content, title=None, metadata=None):
-        if not self.db:
-            return None
-        
-        node_id = self.db.create_content_node(
-            node_type=node_type,
-            content=content,
-            title=title,
-            parent_node_id=self.active_node_id,
-            session_id=self.active_session_id,
-            metadata=metadata
-        )
-        self.active_node_id = node_id
-        return node_id
-
-# ======================
-# Service Layer (DB Operations Decoupled from UI)
-# ======================
 
 class PopupDataService:
     """Encapsulates all DB operations for popups."""
@@ -69,7 +42,6 @@ class PopupDataService:
     def save_word(self, word, translation, session_id=None):
         if not self.db:
             return None
-        
         word_id = self.db.add_word(word, translation, example="")
         if session_id:
             self.db.add_word_to_session(session_id, word_id)
@@ -78,7 +50,6 @@ class PopupDataService:
     def save_explanation_as_content(self, title, content, session_id=None, parent_node_id=None, metadata=None):
         if not self.db:
             return None
-        
         return self.db.create_content_node(
             node_type='response',
             content=content,
@@ -91,7 +62,6 @@ class PopupDataService:
     def record_word_occurrence(self, word, content_node_id, position_start=0, position_end=None):
         if not self.db or not content_node_id:
             return
-        
         word_id = self.db.get_word_id(word)
         if word_id:
             self.db.record_word_occurrence(
@@ -186,20 +156,16 @@ class PopupSaveManager:
     def extract_translation(self, explanation_text):
         if not explanation_text:
             return ""
-        
         import re
         sentences = re.split(r'[。！？\.\!\?]', explanation_text)
         first_sentence = sentences[0].strip() if sentences else ""
-        
         if len(first_sentence) > 200:
             first_sentence = first_sentence[:197] + "..."
-        
         return first_sentence
     
     def save_word_with_prompt(self, word, explanation_text):
         if not word or not word.strip():
             return None
-        
         word = word.strip()
         
         if self.data_service.word_exists(word):
@@ -207,12 +173,7 @@ class PopupSaveManager:
             return None
         
         suggested = self.extract_translation(explanation_text)
-        
-        dialog = TranslationDialog(
-            self.parent_widget or tk._default_root,
-            word,
-            suggested
-        )
+        dialog = TranslationDialog(self.parent_widget or ctk._default_root, word, suggested)
         translation = dialog.show()
         
         if not translation:
@@ -228,228 +189,17 @@ class PopupSaveManager:
         
         return word_id
 
-# ======================
-# Reusable Components
-# ======================
-
-class LookupPanel(ctk.CTkFrame):
-    """Reusable sidebar panel for CEDICT lookup."""
-    def __init__(self, master, word_index=None, char_def_index=None, word_click_callback=None, 
-                 generate_explanation_callback=None, data_service=None, context=None, **kwargs):
-        super().__init__(master, fg_color=("gray85", "gray25"), corner_radius=8, **kwargs)
-        self.word_index = word_index or {}
-        self.char_def_index = char_def_index or {}
-        self.last_looked_up_word = None
-        self.tracked_text_widgets = []
-        self.current_hovered_word = None
-        self.word_click_callback = word_click_callback or self._default_word_click
-        self.generate_explanation_callback = generate_explanation_callback
-        self.data_service = data_service
-        self.context = context
-
-        lookup_title = ctk.CTkLabel(self, text="📖 Lookup", font=("Mengshen-Handwritten", 14, "bold"), text_color="orange")
-        lookup_title.pack(pady=5)
-
-        self.lookup_text = ctk.CTkTextbox(self, wrap="word", font=("Mengshen-Handwritten", 12), height=120)
-        self.lookup_text.configure(state="disabled")
-        self.lookup_text.pack(fill="both", expand=True, padx=5, pady=5)
-
-    def bind_text_box(self, ctk_textbox):
-        try:
-            underlying = getattr(ctk_textbox, '_textbox', None)
-            if underlying:
-                self.tracked_text_widgets.append(underlying)
-                underlying.bind("<Motion>", lambda e: self._on_text_motion(e))
-                underlying.bind("<Leave>", lambda e: self._on_text_leave())
-                underlying.bind("<ButtonPress-1>", lambda e: self._on_button_press(e))
-                underlying.bind("<ButtonRelease-1>", lambda e: self._on_button_release(e))
-        except Exception:
-            pass
-
-    def _on_text_motion(self, event):
-        try:
-            text_widget = event.widget
-            index = text_widget.index(f"@{event.x},{event.y}")
-            if not index: return
-            line, col = map(int, index.split("."))
-            text_content = text_widget.get("1.0", "end-1c")
-            lines = text_content.split("\n")
-            abs_pos = sum(len(lines[i]) + 1 for i in range(line - 1)) + col
-            if abs_pos >= len(text_content): return
-            if abs_pos > 0 and not is_chinese_char(text_content[abs_pos]) and is_chinese_char(text_content[abs_pos - 1]):
-                abs_pos = abs_pos - 1
-            word, start_pos, end_pos = extract_chinese_word_at_position(text_content, abs_pos, self.word_index)
-            if word and word != self.last_looked_up_word:
-                self.last_looked_up_word = word
-                self.current_hovered_word = word
-                self._update_lookup_panel(word)
-        except Exception:
-            pass
-
-    def _on_text_leave(self):
-        self.last_looked_up_word = None
-        self._clear_lookup_panel()
-
-    def _on_button_press(self, event):
-        try:
-            event.widget._last_press = (event.x, event.y, getattr(event, 'time', None))
-        except Exception:
-            pass
-
-    def _on_button_release(self, event):
-        try:
-            widget = event.widget
-            press = getattr(widget, '_last_press', None)
-            if not press: return
-            px, py, ptime = press
-            dx, dy = abs(event.x - px), abs(event.y - py)
-            dt = getattr(event, 'time', None) - ptime if ptime and getattr(event, 'time', None) else None
-            if dx <= 5 and dy <= 5 and (dt is None or dt <= 500):
-                self._on_text_click(event)
-            widget._last_press = None
-        except Exception:
-            pass
-
-    def _on_text_click(self, event):
-        if self.current_hovered_word:
-            self._show_word_mode_popup(self.current_hovered_word)
-
-    def _update_lookup_panel(self, word):
-        self.lookup_text.configure(state="normal")
-        self.lookup_text.delete("1.0", "end")
-        self.lookup_text.insert("end", self._format_lookup_text(word))
-        self.lookup_text.configure(state="disabled")
-
-    def _clear_lookup_panel(self):
-        self.lookup_text.configure(state="normal")
-        self.lookup_text.delete("1.0", "end")
-        self.lookup_text.configure(state="disabled")
-
-    def _format_lookup_text(self, word):
-        if not lookup_cedict: return "CEDICT not available"
-        try:
-            word_entry, char_matches = lookup_cedict(word, self.word_index, self.char_def_index)
-            if word_entry:
-                parts = [f"📖 {word_entry.get('simplified','')}\n({word_entry.get('traditional','')})\n"]
-                parts.extend(f"• {d}" for d in word_entry.get('definitions', []))
-                return "\n".join(parts)
-            elif char_matches:
-                return "Character breakdown:\n" + "\n".join(f"• {char}: {entry.get('simplified','')}" for char, entry in char_matches)
-            return "No match found"
-        except Exception:
-            return "No match found"
-
-    def _default_word_click(self, word, selected_mode):
-        message = f"Mode: {selected_mode}\nWord: {word}\n\n{self._format_lookup_text(word)}"
-        Long_message_popup(f"{word} — {selected_mode}", message, master=self, display_image=True, 
-                           word_index=self.word_index, char_def_index=self.char_def_index, word_click_callback=None).show()
-
-    def _show_word_mode_popup(self, word, data_service=None, db=None, session_id=None):
-        parent_node_id = self.context.active_node_id if self.context else None
-        if parent_node_id:
-            print(f"🔗 Using LookupPanel context.active_node_id: {parent_node_id}")
-        
-        popup = ctk.CTkToplevel(self)
-        popup.geometry("400x250")
-        popup.title(f"Select Mode for '{word}'")
-        popup.attributes("-topmost", True)
-        
-        ctk.CTkLabel(popup, text=f"Word: {word}", font=("Mengshen-Handwritten", 16, "bold")).pack(pady=(10, 5))
-        ctk.CTkLabel(popup, text="Choose a mode:", font=("Mengshen-Handwritten", 12)).pack(pady=5)
-        
-        mode_var = ctk.StringVar(value=MODES[0])
-        ctk.CTkOptionMenu(popup, values=MODES, variable=mode_var, font=("Mengshen-Handwritten", 11)).pack(pady=10, padx=20, fill="x")
-        
-        button_frame = ctk.CTkFrame(popup, fg_color="transparent")
-        button_frame.pack(pady=10, padx=20, fill="x")
-        
-        service = data_service or self.data_service
-        if not service and db:
-            service = PopupDataService(db)
-        
-        def on_select():
-            print(f"🔗 LookupPanel: Selected word '{word}' with mode '{mode_var.get()}', parent_node_id={parent_node_id}")
-            
-            new_node_id = None
-            if service and service.db and parent_node_id:
-                new_node_id = service.save_explanation_as_content(
-                    title=f"Lookup: {word}",
-                    content=word,
-                    session_id=session_id,
-                    parent_node_id=parent_node_id,
-                    metadata={"source": "lookup_panel", "mode": mode_var.get()}
-                )
-                if new_node_id:
-                    service.record_word_occurrence(word, new_node_id, 0, len(word))
-                    print(f"✓ Created lookup node {new_node_id} with parent {parent_node_id}")
-                    if self.context:
-                        self.context.active_node_id = new_node_id
-            
-            if self.generate_explanation_callback:
-                self.generate_explanation_callback(word, mode_var.get(), context=self.context)
-            else:
-                self.word_click_callback(word, mode_var.get())
-            
-            popup.destroy()
-        
-        ctk.CTkButton(button_frame, text="✓ Select", fg_color="green", command=on_select).pack(side="left", padx=5, expand=True)
-        ctk.CTkButton(button_frame, text="✕ Cancel", fg_color="#942626", command=popup.destroy).pack(side="left", padx=5, expand=True)
-        
-        if parent_node_id and service and service.db:
-            chain_info = ctk.CTkLabel(popup, text=f"🔗 This lookup will be linked to existing content (parent: {parent_node_id})", 
-                                    font=ctk.CTkFont(size=10), text_color="green")
-            chain_info.pack(pady=5)
-
-
-class ThinkBox(ctk.CTkFrame):
-    """Simple collapsible thinking box - UI only, no streaming logic."""
-    def __init__(self, master, **kwargs):
-        super().__init__(master, fg_color="transparent", **kwargs)
-        self.think_visible = True
-
-        think_header = ctk.CTkFrame(self, fg_color="transparent")
-        think_header.pack(side="top", fill="x", pady=(0, 3))
-        ctk.CTkLabel(think_header, text="🧠 Thinking", font=("Mengshen-Handwritten", 12, "bold")).pack(side="left")
-        self.toggle_btn = ctk.CTkButton(think_header, text="▲", width=25, height=20, command=self._toggle)
-        self.toggle_btn.pack(side="right", padx=(5, 0))
-
-        self.text_box = ctk.CTkTextbox(self, wrap="word", font=("Mengshen-Handwritten", 12), height=3)
-        self.text_box.configure(state="disabled")
-        self.text_box.pack(fill="both", expand=True)
-
-    def append(self, text):
-        """Append text (call from UI thread only)."""
-        self.text_box.configure(state="normal")
-        self.text_box.insert("end", text)
-        self.text_box.configure(state="disabled")
-        self.text_box.see("end")
-
-    def clear(self):
-        """Clear text (call from UI thread only)."""
-        self.text_box.configure(state="normal")
-        self.text_box.delete("1.0", "end")
-        self.text_box.configure(state="disabled")
-
-    def _toggle(self):
-        self.think_visible = not self.think_visible
-        if self.think_visible:
-            self.text_box.pack(fill="both", expand=True)
-            self.toggle_btn.configure(text="▲")
-        else:
-            self.text_box.pack_forget()
-            self.toggle_btn.configure(text="▼")
-
 
 class ControlPanel:
-    def __init__(self, app_callback=None, ai_client:OllamaClient=OllamaClient(), db=None, data_service=None, context=None): 
+    def __init__(self, app_callback=None, ai_client: OllamaClient = OllamaClient(), db=None, data_service=None, context=None): 
         ctk.set_appearance_mode("dark")
-        ctk.set_default_color_theme(os.path.join(current_folder, "theme.json"))
+        # ctk.set_default_color_theme(os.path.join(current_folder, "theme.json"))
 
         self.ai = ai_client
         self.db = db
         self.data_service = data_service or PopupDataService(db)
-        self.context = context or LearningContext(db)
-        self.context.current_mode = MODES[1]
+        self.context = context or ChainManager(db)
+        self.context.current_mode = MODES[1] if hasattr(self.context, 'current_mode') else MODES[1]
         
         self.ai_opened = True
         self.opened = False
@@ -713,7 +463,6 @@ class ControlPanel:
             self.generate_callback(self.current_clipboard_text)
 
     def load_ai(self):
-        """Load AI model using unified async pattern."""
         def worker():
             return self.ai.manage_model("load")
         
@@ -937,274 +686,6 @@ class ControlPanel:
         self.root.destroy()
 
 
-def popup_message(title, message, is_yes_no=False, parent=None):
-    root = parent or tk._default_root
-    created_root = False
-    if root is None:
-        root = tk.Tk()
-        root.withdraw()
-        created_root = True
-
-    try:
-        if is_yes_no:
-            return tkmb.askyesno(title, message, parent=root)
-        else:
-            tkmb.showinfo(title, message, parent=root)
-            return None
-    finally:
-        if created_root:
-            root.destroy()
-
-
-class Long_message_popup:
-    def __init__(self, title, message, master, display_image=True, 
-             word_index=None, char_def_index=None, word_click_callback=None,
-             data_service=None, db=None, session_id=None, context=None,
-             generate_explanation_callback=None):
-        
-        parent = getattr(master, 'root', master)
-        self.long_popup = ctk.CTkToplevel(parent)
-        self.long_popup.geometry("900x550")
-        self.long_popup.title(title)
-        self.long_popup.attributes("-topmost", True)
-
-        self.debug = DebugLogger("Long_message_popup")
-        self.debug.debug(f"Creating popup: title='{title}', context.active_node_id={context.active_node_id if context else None}, session_id={session_id}")
-        
-        if data_service:
-            self.data_service = data_service
-        elif db:
-            self.data_service = PopupDataService(db)
-        else:
-            self.data_service = PopupDataService(None)
-        
-        self.db = db
-        self.context = context or LearningContext(self.data_service.db if self.data_service else None)
-        if session_id:
-            self.context.active_session_id = session_id
-        self.generate_explanation_callback = generate_explanation_callback
-        self.active_node_id_before_popup = self.context.active_node_id if self.context else None
-        self.control_panel = master if hasattr(master, 'root') else getattr(master, 'control_panel', None)
-
-        ctk.CTkLabel(self.long_popup, text=title, font=("Mengshen-Handwritten", 24, "bold")).pack(pady=(5, 5))
-        
-        content_frame = ctk.CTkFrame(self.long_popup, fg_color="transparent")
-        content_frame.pack(fill="both", expand=True, padx=10, pady=5)
-        
-        if display_image:
-            try:
-                img_num = random.randint(1, 5)
-                img_path = os.path.join(repo_folder, ".misc", "long_response", f"{img_num}.png")
-                img = Image.open(img_path)
-                max_size = (150, 150)
-                scale = min(max_size[0]/img.size[0], max_size[1]/img.size[1])
-                photo = ctk.CTkImage(img, size=(int(img.size[0]*scale), int(img.size[1]*scale)))
-                img_label = ctk.CTkLabel(content_frame, image=photo, text="")
-                img_label.image = photo
-                img_label.pack(side="left", padx=5, pady=0)
-            except Exception:
-                pass
-
-        text_panel_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
-        text_panel_frame.pack(side="left", fill="both", expand=True, padx=5)
-        
-        input_frame = ctk.CTkFrame(text_panel_frame, fg_color="transparent")
-        input_frame.pack(side="top", fill="x", padx=5, pady=(0,5))
-
-        self.input_box = ctk.CTkTextbox(input_frame, wrap="word", font=("Mengshen-Handwritten", 16), height=3)
-        self.input_box.insert("1.0", message)
-        self.input_box.configure(state="normal")
-        self.input_box.pack(side="left", fill="both", expand=True, padx=(0,5))
-
-        self.think_component = ThinkBox(input_frame)
-        self.think_component.pack(side="left", fill="both", expand=True, padx=(5,0))
-
-        self.text_box = ctk.CTkTextbox(text_panel_frame, wrap="word", font=("Mengshen-Handwritten", 20))
-        self.text_box.insert("1.0", message)
-        self.text_box.configure(state="disabled")
-        self.text_box.pack(side="left", fill="both", expand=True, padx=5, pady=5)
-        
-        self.lookup_panel = LookupPanel(text_panel_frame, word_index=word_index, char_def_index=char_def_index, 
-                                         word_click_callback=word_click_callback,
-                                         generate_explanation_callback=generate_explanation_callback,
-                                         data_service=self.data_service,
-                                         context=self.context)
-        self.lookup_panel.pack(side="right", fill="y", padx=5, pady=5, ipadx=10, ipady=10)
-        self.lookup_panel.pack_propagate(False)
-        self.lookup_panel.configure(width=180)
-        
-        if lookup_cedict and extract_chinese_word_at_position:
-            self.lookup_panel.bind_text_box(self.input_box)
-            self.lookup_panel.bind_text_box(self.text_box)
-            self.lookup_panel.bind_text_box(self.think_component.text_box)
-        
-        if self.data_service and self.data_service.db:
-            chain_btn = ctk.CTkButton(self.long_popup, text="🔗 View Chain", width=100,
-                                    command=self._view_chain)
-            chain_btn.pack(side="bottom", pady=5)
-        
-        if self.data_service and self.data_service.db:
-            self.debug.debug("Storing popup content as node...")
-            self.store_as_content_node()
-        self.long_popup.bind("<Control-d>", lambda e: self._debug_current_chain())
-
-        if self.data_service and self.data_service.db and self.context.active_node_id:
-            chain_frame = ctk.CTkFrame(self.long_popup, fg_color="transparent")
-            chain_frame.pack(side="bottom", fill="x", padx=10, pady=5)
-            
-            chain_status = ctk.CTkLabel(chain_frame, 
-                text=f"🔗 Current chain node: {self.context.active_node_id}", 
-                font=ctk.CTkFont(size=10), 
-                text_color="green")
-            chain_status.pack(side="left", padx=5)
-            
-            view_chain_btn = ctk.CTkButton(chain_frame, text="View Chain", width=80, height=25,
-                                          command=self._view_chain)
-            view_chain_btn.pack(side="right", padx=5)
-
-    def _generate_for_word(self, text, mode=None, context=None):
-        original_mode = None
-        if mode and self.control_panel:
-            original_mode = self.control_panel.response_mode
-            self.control_panel.response_mode = mode
-        
-        if self.data_service and self.data_service.db:
-            use_context = context or self.context
-            query_node_id = use_context.create_child_node(
-                node_type='query',
-                title=f"Query: {text}",
-                content=text,
-                metadata={"source": "clipboard_query", "mode": mode or self.control_panel.response_mode}
-            )
-            print(f"📝 Created query node: {query_node_id} for text: {text}")
-            
-            if query_node_id:
-                self.data_service.record_word_occurrence(text, query_node_id, 0, len(text))
-        
-        try:
-            explanation = self.get_explanation(text)
-            if isinstance(explanation, str):
-                explanation = (explanation,)
-            self._show_explanation_popup(text, explanation, context=use_context)
-        finally:
-            if original_mode and self.control_panel:
-                self.control_panel.response_mode = original_mode
-
-    
-    def _show_explanation_popup(self, text, explanation_generator, context=None):
-        use_context = context or self.context
-        
-        print(f"🔗 Creating popup with context.active_node_id={use_context.active_node_id} for text='{text}'")
-        
-        response_popup = Long_message_popup(
-            "Explanation",
-            text,
-            master=self.control_panel,
-            display_image=(self.control_panel.response_mode.lower() != "lookup only"),
-            word_index=self.word_index,
-            char_def_index=self.char_def_index,
-            data_service=self.data_service,
-            context=use_context,
-            generate_explanation_callback=self._generate_for_word
-        )
-        
-        response_popup.start_streaming(explanation_generator, text)
-        response_popup.show()
-
-    def start_streaming(self, generator, word_text):
-        """Start streaming using unified async function."""
-        def on_complete(full_text):
-            self._on_stream_complete(word_text, full_text)
-        
-        stream_to_widgets(
-            root=self.long_popup,
-            generator=generator,
-            text_widget=self.text_box,
-            think_widget=self.think_component.text_box,
-            on_complete=on_complete,
-            show_thinking=self.control_panel.show_thinking if self.control_panel else True
-        )
-
-    def _on_stream_complete(self, word, full_text):
-        """Called when streaming finishes."""
-        if self.context:
-            self.context.create_child_node(
-                node_type='response',
-                content=full_text,
-                title=f"Response to: {word}",
-                metadata={"source": "ai_explanation"}
-            )
-        self._setup_save_button(word, full_text)
-
-    def _setup_save_button(self, word, explanation_text):
-        def save_logic():
-            if self.control_panel and hasattr(self.control_panel, 'save_manager'):
-                word_id = self.control_panel.save_manager.save_word_with_prompt(
-                    word, 
-                    explanation_text
-                )
-                if word_id:
-                    print(f"✓ Word '{word}' saved successfully!")
-            self.long_popup.destroy()
-        
-        self.add_button("💾 Save/Update word", save_logic)
-
-    def _debug_current_chain(self):
-        if not self.context or not self.context.active_node_id:
-            self.store_as_content_node()
-        
-        if self.context and self.context.active_node_id and self.data_service and self.data_service.db:
-            chain = self.data_service.db.get_content_chain(self.context.active_node_id)
-            popup_message("Debug", f"Node {self.context.active_node_id} has chain length {len(chain)}", parent=self.long_popup)
-            
-    def add_button(self, text, command):
-        btn = ctk.CTkButton(self.long_popup, text=text, command=command)
-        btn.pack(side="bottom", expand=True, fill="x", pady=10, padx=10)
-        return btn
-    
-    def store_as_content_node(self):
-        self.debug.debug(f"Storing as content node: title={self.long_popup.title()}")
-        
-        if not self.data_service or not self.data_service.db:
-            self.debug.warning("No data_service or db available")
-            return
-        
-        title = self.long_popup.title()
-        content = self.text_box.get("1.0", "end-1c")
-        
-        node_id = self.context.create_child_node(
-            node_type='response',
-            content=content,
-            title=title,
-            metadata={"source": "popup_display"}
-        )
-        self.debug.info(f"Stored as node {node_id}, active_node_id now {self.context.active_node_id}")
-        
-        if node_id:
-            import re
-            chinese_words = set(re.findall(r'[\u4e00-\u9fff]{2,}', content))
-            self.debug.debug(f"Found {len(chinese_words)} Chinese words in content")
-            for word in chinese_words:
-                self.debug.debug(f"  Recording occurrence: '{word}'")
-                self.data_service.record_word_occurrence(word, node_id)
-    
-    def _view_chain(self):
-        if not self.data_service or not self.data_service.db:
-            return
-        
-        if not self.context or not self.context.active_node_id:
-            self.store_as_content_node()
-        
-        if self.context and self.context.active_node_id:
-            from lib.chain_viewer import ChainViewer
-            viewer = ChainViewer(self.long_popup, self.data_service.db, self.context.active_node_id, 
-                                f"Chain for: {self.long_popup.title()}")
-            viewer.focus()
-    
-    def show(self):
-        self.long_popup.focus_set()
-
-
 class ReviewFrame(ctk.CTkFrame):
     def __init__(self, master, reviewer, **kwargs):
         super().__init__(master, **kwargs)
@@ -1377,7 +858,7 @@ class HomeFrame(ctk.CTkFrame):
         def generator():
             return self.ai.generate_response(
                 f"Word Blossom Mode: {word_list}",
-                self.control_panel.show_thinking if self.control_panel else True
+                display_thinking=self.control_panel.show_thinking if self.control_panel else True
             )
         
         def on_complete(_):
@@ -1409,7 +890,7 @@ class HomeFrame(ctk.CTkFrame):
         def generator():
             return self.ai.generate_response(
                 f"Summarize these words with Sparkle Notes Mode: {word_list}",
-                self.control_panel.show_thinking if self.control_panel else True
+                display_thinking=self.control_panel.show_thinking if self.control_panel else True
             )
         
         def on_complete(_):
@@ -1477,9 +958,14 @@ class App(ctk.CTk):
             frame.grid_forget()
         self.frames[page_name].grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
 
+
 if __name__ == "__main__":
     popup_message("Test Message", "This is a test message to verify the popup_message function is working correctly.")
     panel = ControlPanel()
-    longpop = Long_message_popup("Test Long Popup", "This is a test of the long message popup. It should display this text and an image if enabled.", master=panel, display_image=True)
-    longpop.show()
+    # Test with a mock chain manager
+    from lib.chain import ChainManager
+    mock_chain = ChainManager(None)
+    popup = StreamingPopup("测试", panel.root, mock_chain, None, mode="Lookup Only", 
+                           word_index={}, char_def_index={})
+    popup.focus()
     panel.show()
