@@ -11,6 +11,7 @@ from datetime import datetime
 from lib.sentence_explorer import SentenceExplorerFrame
 from lib.debug_utils import DebugLogger
 import time
+from functools import partial
 
 MODES=["Lookup Only","Sparkle Notes","Immersion Mode", "Word Blossom", "Sentence Whisper"]
 
@@ -28,6 +29,97 @@ except ImportError:
     lookup_cedict = extract_chinese_word_at_position = is_chinese_char = None
 
 # ======================
+# UNIFIED ASYNC PATTERN - Single interface for all async operations
+# ======================
+
+class AsyncWorker:
+    """
+    Unified async worker for all non-UI operations.
+    Rules:
+    1. Long operations (AI, DB writes) go in worker threads
+    2. ALL UI updates happen via root.after()
+    3. Never call UI methods directly from worker threads
+    """
+    
+    def __init__(self, root_widget):
+        self.root = root_widget
+        self._active_threads = []
+    
+    def run_async(self, worker_func, callback=None, error_callback=None):
+        """
+        Run a function in a background thread.
+        
+        Args:
+            worker_func: Function to run in background (can return a value)
+            callback: Function to call on UI thread with result
+            error_callback: Function to call on UI thread with exception
+        """
+        def wrapper():
+            try:
+                result = worker_func()
+                if callback:
+                    self.root.after(0, lambda: callback(result))
+            except Exception as e:
+                print(f"Async error: {e}")
+                if error_callback:
+                    self.root.after(0, lambda: error_callback(e))
+                else:
+                    self.root.after(0, lambda: self._show_error(e))
+        
+        thread = threading.Thread(target=wrapper, daemon=True)
+        self._active_threads.append(thread)
+        thread.start()
+        return thread
+    
+    def run_async_generator(self, generator_func, on_chunk=None, on_complete=None, on_error=None):
+        """
+        Run a generator in background (for streaming AI responses).
+        
+        Args:
+            generator_func: Function that returns a generator
+            on_chunk: Called on UI thread for each chunk (string)
+            on_complete: Called on UI thread when complete
+            on_error: Called on UI thread on error
+        """
+        def wrapper():
+            try:
+                full_result = []
+                for chunk in generator_func():
+                    full_result.append(chunk)
+                    if on_chunk:
+                        self.root.after(0, lambda c=chunk: on_chunk(c))
+                if on_complete:
+                    self.root.after(0, lambda: on_complete(''.join(full_result)))
+            except Exception as e:
+                print(f"Generator error: {e}")
+                if on_error:
+                    self.root.after(0, lambda: on_error(e))
+        
+        thread = threading.Thread(target=wrapper, daemon=True)
+        self._active_threads.append(thread)
+        thread.start()
+        return thread
+    
+    def _show_error(self, error):
+        """Show error in UI (safe to call from after)."""
+        try:
+            error_label = ctk.CTkLabel(
+                self.root, 
+                text=f"⚠️ Error: {str(error)[:100]}", 
+                text_color="red"
+            )
+            error_label.pack(pady=10)
+            self.root.after(3000, error_label.destroy)
+        except:
+            pass
+    
+    def cleanup(self):
+        """Wait for all threads to complete (optional)."""
+        for thread in self._active_threads:
+            if thread.is_alive():
+                thread.join(timeout=0.1)
+
+# ======================
 # Learning Context - Single source of truth for chain tracking
 # ======================
 
@@ -35,12 +127,11 @@ class LearningContext:
     """Single source of truth for current learning session state."""
     def __init__(self, db=None):
         self.db = db
-        self.active_node_id = None  # The node currently being viewed
+        self.active_node_id = None
         self.active_session_id = None
         self.current_mode = "Sparkle Notes"
     
     def create_child_node(self, node_type, content, title=None, metadata=None):
-        """Create a new node as child of active node, then set it as active."""
         if not self.db:
             return None
         
@@ -56,90 +147,87 @@ class LearningContext:
         return node_id
 
 # ======================
-# Core Streaming Handlers
+# SIMPLIFIED Streaming Handlers - Now using AsyncWorker
 # ======================
 
-def stream_ai_response(ai, prompt, display_thinking, on_think=None, on_chunk=None, on_complete=None):
-    """Core streaming handler - yields chunks and routes thinking text."""
-    try:
-        full_response = ""
-        for chunk in ai.generate_response(prompt, display_thinking):
-            if chunk.startswith("__THINK__"):
-                thinking_text = chunk[len("__THINK__"):]
-                if on_think:
-                    on_think(thinking_text)
-            else:
-                full_response += chunk
-                if on_chunk:
-                    on_chunk(chunk)
-        if on_complete:
-            on_complete(full_response)
-        return full_response
-    except Exception as e:
-        error_msg = f"Error: {str(e)}"
-        if on_chunk:
-            on_chunk(error_msg)
-        return error_msg
-
 class StreamHandler:
-    """Helper class to manage streaming updates to UI components."""
-    def __init__(self, master, text_widget, think_widget, control_panel=None):
+    """Simplified streaming handler using AsyncWorker."""
+    def __init__(self, master, text_widget, think_widget, async_worker=None):
         self.master = master
         self.text_widget = text_widget
         self.think_widget = think_widget
-        self.display_thinking = getattr(control_panel, 'show_thinking', False) if control_panel else False
+        self.async_worker = async_worker or AsyncWorker(master)
     
     def append_text(self, text):
-        """Thread-safe text append."""
-        self.text_widget.configure(state="normal")
-        self.text_widget.insert("end", text)
-        self.text_widget.configure(state="disabled")
-        self.text_widget.see("end")
-    
-    def set_text(self, text):
-        """Thread-safe text replacement."""
-        self.text_widget.configure(state="normal")
-        self.text_widget.delete("1.0", "end")
-        self.text_widget.insert("1.0", text)
-        self.text_widget.configure(state="disabled")
+        """Thread-safe text append (must be called via after)."""
+        try:
+            self.text_widget.configure(state="normal")
+            self.text_widget.insert("end", text)
+            self.text_widget.configure(state="disabled")
+            self.text_widget.see("end")
+        except:
+            pass
     
     def append_think(self, text):
-        """Thread-safe think append."""
+        """Thread-safe think append (must be called via after)."""
         if self.think_widget:
-            self.think_widget.configure(state="normal")
-            self.think_widget.insert("end", text)
-            self.think_widget.configure(state="disabled")
-            self.think_widget.see("end")
+            try:
+                self.think_widget.configure(state="normal")
+                self.think_widget.insert("end", text)
+                self.think_widget.configure(state="disabled")
+                self.think_widget.see("end")
+            except:
+                pass
     
     def clear_think(self):
-        """Clear think widget."""
+        """Clear think widget (must be called via after)."""
         if self.think_widget:
-            self.think_widget.configure(state="normal")
-            self.think_widget.delete("1.0", "end")
-            self.think_widget.configure(state="disabled")
+            try:
+                self.think_widget.configure(state="normal")
+                self.think_widget.delete("1.0", "end")
+                self.think_widget.configure(state="disabled")
+            except:
+                pass
     
-    def stream(self, ai, prompt, on_complete=None):
-        """Start streaming response."""
-        def generate():
-            stream_ai_response(
-                ai, prompt, self.display_thinking,
-                on_think=lambda t: self.master.after(0, lambda: self.append_think(t)),
-                on_chunk=lambda c: self.master.after(0, lambda: self.append_text(c)),
-                on_complete=lambda _: self.master.after(0, on_complete) if on_complete else None
-            )
-        threading.Thread(target=generate, daemon=True).start()
+    def set_text(self, text):
+        """Replace text (must be called via after)."""
+        try:
+            self.text_widget.configure(state="normal")
+            self.text_widget.delete("1.0", "end")
+            self.text_widget.insert("1.0", text)
+            self.text_widget.configure(state="disabled")
+        except:
+            pass
+    
+    def stream_from_generator(self, generator_func, on_complete=None, display_thinking=True):
+        """Stream from a generator function using AsyncWorker."""
+        def on_chunk(chunk):
+            if display_thinking and chunk.startswith("__THINK__"):
+                thinking = chunk[len("__THINK__"):]
+                self.append_think(thinking)
+            else:
+                self.append_text(chunk)
+        
+        def on_complete_wrapper(full_result):
+            if on_complete:
+                on_complete(full_result)
+        
+        self.async_worker.run_async_generator(
+            generator_func=generator_func,
+            on_chunk=on_chunk,
+            on_complete=on_complete_wrapper
+        )
 
 # ======================
 # Service Layer (DB Operations Decoupled from UI)
 # ======================
 
 class PopupDataService:
-    """Encapsulates all DB operations for popups. Decouples UI from DB schema."""
+    """Encapsulates all DB operations for popups."""
     def __init__(self, db=None):
         self.db = db
     
     def save_word(self, word, translation, session_id=None):
-        """Save word to database. Returns word_id or None if no DB."""
         if not self.db:
             return None
         
@@ -149,7 +237,6 @@ class PopupDataService:
         return word_id
     
     def save_explanation_as_content(self, title, content, session_id=None, parent_node_id=None, metadata=None):
-        """Store explanation as content node. Returns node_id or None if no DB."""
         if not self.db:
             return None
         
@@ -163,7 +250,6 @@ class PopupDataService:
         )
     
     def record_word_occurrence(self, word, content_node_id, position_start=0, position_end=None):
-        """Record where a word appears in content. Requires DB."""
         if not self.db or not content_node_id:
             return
         
@@ -177,14 +263,12 @@ class PopupDataService:
             )
     
     def get_active_session_id(self):
-        """Get current active session ID, or None if no session or no DB."""
         if not self.db:
             return None
         active = self.db.get_active_session()
         return active['session_id'] if active else None
     
     def word_exists(self, word):
-        """Check if word already exists in database."""
         if not self.db:
             return False
         return self.db.get_word_id(word) is not None
@@ -199,25 +283,20 @@ class TranslationDialog:
         self.dialog.title(f"Confirm Translation: {word}")
         self.dialog.attributes("-topmost", True)
         self.dialog.resizable(False, False)
-        
-        # Make dialog modal
         self.dialog.grab_set()
         
-        # Word display
         ctk.CTkLabel(
             self.dialog, 
             text=f"Word: {word}", 
             font=("Mengshen-Handwritten", 18, "bold")
         ).pack(pady=(10, 5))
         
-        # Translation label
         ctk.CTkLabel(
             self.dialog,
             text="Translation (edit if needed):",
             font=("Mengshen-Handwritten", 12)
         ).pack(pady=(5, 2))
         
-        # Translation text box
         self.translation_box = ctk.CTkTextbox(
             self.dialog,
             wrap="word",
@@ -227,7 +306,6 @@ class TranslationDialog:
         self.translation_box.insert("1.0", suggested_translation)
         self.translation_box.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         
-        # Button frame
         button_frame = ctk.CTkFrame(self.dialog, fg_color="transparent")
         button_frame.pack(fill="x", padx=10, pady=(0, 10))
         
@@ -254,58 +332,43 @@ class TranslationDialog:
         self.dialog.destroy()
     
     def show(self):
-        """Show modal and return translation or None if cancelled."""
         self.dialog.focus_set()
         self.dialog.wait_window()
         return self.result
 
 
 class PopupSaveManager:
-    """Orchestrates word save workflow: extraction, validation, user confirmation."""
+    """Orchestrates word save workflow."""
     def __init__(self, data_service, parent_widget=None, context=None):
         self.data_service = data_service
         self.parent_widget = parent_widget
         self.context = context
     
     def extract_translation(self, explanation_text):
-        """Extract translation from AI explanation text.
-        
-        Strategy: Take first sentence (up to . ! or ?), or first 150 chars.
-        This is the suggested translation; user can edit it.
-        """
         if not explanation_text:
             return ""
         
-        # Try to extract first sentence
         import re
         sentences = re.split(r'[。！？\.\!\?]', explanation_text)
         first_sentence = sentences[0].strip() if sentences else ""
         
-        # If too long, truncate
         if len(first_sentence) > 200:
             first_sentence = first_sentence[:197] + "..."
         
         return first_sentence
     
     def save_word_with_prompt(self, word, explanation_text):
-        """Save word: extract translation, prompt user to confirm, then save.
-        
-        Returns: word_id if saved, None if cancelled.
-        """
         if not word or not word.strip():
             return None
         
         word = word.strip()
         
-        # Check if word already exists
         if self.data_service.word_exists(word):
             tkmb.showinfo("Word Exists", f"'{word}' is already in your vocabulary.")
             return None
         
-        # Extract suggested translation
         suggested = self.extract_translation(explanation_text)
         
-        # Prompt user to confirm/edit translation
         dialog = TranslationDialog(
             self.parent_widget or tk._default_root,
             word,
@@ -313,19 +376,14 @@ class PopupSaveManager:
         )
         translation = dialog.show()
         
-        if not translation:  # User cancelled
+        if not translation:
             return None
         
-        # Get active session if available
         session_id = self.data_service.get_active_session_id()
-        
-        # Get parent node from context if available
         parent_node_id = self.context.active_node_id if self.context else None
         
-        # Save to DB
         word_id = self.data_service.save_word(word, translation, session_id=session_id)
         
-        # Record word occurrence in content node if available
         if word_id and parent_node_id:
             self.data_service.record_word_occurrence(word, parent_node_id)
         
@@ -336,7 +394,7 @@ class PopupSaveManager:
 # ======================
 
 class LookupPanel(ctk.CTkFrame):
-    """Reusable sidebar panel for CEDICT lookup with hover binding support."""
+    """Reusable sidebar panel for CEDICT lookup."""
     def __init__(self, master, word_index=None, char_def_index=None, word_click_callback=None, 
                  generate_explanation_callback=None, data_service=None, context=None, **kwargs):
         super().__init__(master, fg_color=("gray85", "gray25"), corner_radius=8, **kwargs)
@@ -358,7 +416,6 @@ class LookupPanel(ctk.CTkFrame):
         self.lookup_text.pack(fill="both", expand=True, padx=5, pady=5)
 
     def bind_text_box(self, ctk_textbox):
-        """Bind a CTkTextbox for hover lookup and click detection."""
         try:
             underlying = getattr(ctk_textbox, '_textbox', None)
             if underlying:
@@ -449,9 +506,6 @@ class LookupPanel(ctk.CTkFrame):
                            word_index=self.word_index, char_def_index=self.char_def_index, word_click_callback=None).show()
 
     def _show_word_mode_popup(self, word, data_service=None, db=None, session_id=None):
-        """Show word mode popup with chain tracking"""
-        
-        # Use the current popup's node as parent if available
         parent_node_id = self.context.active_node_id if self.context else None
         if parent_node_id:
             print(f"🔗 Using LookupPanel context.active_node_id: {parent_node_id}")
@@ -477,7 +531,6 @@ class LookupPanel(ctk.CTkFrame):
         def on_select():
             print(f"🔗 LookupPanel: Selected word '{word}' with mode '{mode_var.get()}', parent_node_id={parent_node_id}")
             
-            # Create a content node for this word lookup if service available
             new_node_id = None
             if service and service.db and parent_node_id:
                 new_node_id = service.save_explanation_as_content(
@@ -490,16 +543,12 @@ class LookupPanel(ctk.CTkFrame):
                 if new_node_id:
                     service.record_word_occurrence(word, new_node_id, 0, len(word))
                     print(f"✓ Created lookup node {new_node_id} with parent {parent_node_id}")
-                    # Update context active node
                     if self.context:
                         self.context.active_node_id = new_node_id
             
-            # If generate_explanation_callback is available, use it for full AI response
             if self.generate_explanation_callback:
-                # Pass the word, mode - context already has active node
                 self.generate_explanation_callback(word, mode_var.get(), context=self.context)
             else:
-                # Fallback to static word click
                 self.word_click_callback(word, mode_var.get())
             
             popup.destroy()
@@ -507,7 +556,6 @@ class LookupPanel(ctk.CTkFrame):
         ctk.CTkButton(button_frame, text="✓ Select", fg_color="green", command=on_select).pack(side="left", padx=5, expand=True)
         ctk.CTkButton(button_frame, text="✕ Cancel", fg_color="#942626", command=popup.destroy).pack(side="left", padx=5, expand=True)
         
-        # Chain info if available
         if parent_node_id and service and service.db:
             chain_info = ctk.CTkLabel(popup, text=f"🔗 This lookup will be linked to existing content (parent: {parent_node_id})", 
                                     font=ctk.CTkFont(size=10), text_color="green")
@@ -557,11 +605,13 @@ class ControlPanel:
 
         self.ai = ai_client
         self.db = db
-        # Create or use provided data service for popup operations
         self.data_service = data_service or PopupDataService(db)
-        # Use provided context or create new one
         self.context = context or LearningContext(db)
-        self.context.current_mode = MODES[1]  # Default to Sparkle Notes
+        self.context.current_mode = MODES[1]
+        
+        # Initialize async worker
+        self.async_worker = None  # Will be set after root exists
+        
         self.ai_opened = True
         self.opened = False
         self.done = False
@@ -575,6 +625,7 @@ class ControlPanel:
         self.show_thinking = True
         
         self.root = ctk.CTk()
+        self.async_worker = AsyncWorker(self.root)  # Initialize after root exists
         self.root.title("Monitor")
         self.root.resizable(width=True, height=True)
         self.root.wm_attributes("-topmost", True)
@@ -615,6 +666,7 @@ class ControlPanel:
         self.session_list_btn = ctk.CTkButton(session_control_frame, text="📜", width=30, height=25,
                                             command=self._show_session_list)
         self.session_list_btn.pack(side="left", padx=2)
+        
         # Buttons Frame
         self.buttons_frame = ctk.CTkFrame(self.root, fg_color="transparent")
         self.buttons_frame.pack(side="top", fill="x", padx=10, pady=5)
@@ -652,12 +704,10 @@ class ControlPanel:
         self.chain_viewer_btn.pack(side="right", padx=2)
     
     def show_chain_selector(self):
-        """Show a window to select a node and view its chain"""
         if not self.db:
             popup_message("No Database", "Database not available", parent=self.root)
             return
         
-        # Get recent nodes
         cursor = self.db._get_cursor()
         cursor.execute("""
             SELECT id, node_type, title, created_at 
@@ -700,7 +750,6 @@ class ControlPanel:
             ctk.CTkButton(item_frame, text="View Chain", width=100, command=view).pack(side="right", padx=5)
 
     def show_debug_console(self):
-        """Show debug console window"""
         if self.debug_console and self.debug_console.winfo_exists():
             self.debug_console.lift()
             return
@@ -710,11 +759,9 @@ class ControlPanel:
         self.debug_console.geometry("800x400")
         self.debug_console.attributes("-topmost", True)
         
-        # Text widget for logs
         self.debug_text = ctk.CTkTextbox(self.debug_console, wrap="word", font=("Consolas", 10))
         self.debug_text.pack(fill="both", expand=True, padx=10, pady=10)
         
-        # Buttons
         btn_frame = ctk.CTkFrame(self.debug_console, fg_color="transparent")
         btn_frame.pack(fill="x", padx=10, pady=(0, 10))
         
@@ -722,7 +769,6 @@ class ControlPanel:
         ctk.CTkButton(btn_frame, text="Test Chain", command=self._test_chain_creation).pack(side="left", padx=5)
         ctk.CTkButton(btn_frame, text="Show Last Node", command=self._show_last_node_chain).pack(side="left", padx=5)
         
-        # Display existing logs
         for log in self.debug_logs:
             self.debug_text.insert("end", log + "\n")
         self.debug_text.see("end")
@@ -732,7 +778,6 @@ class ControlPanel:
         self.debug_logs.clear()
     
     def _test_chain_creation(self):
-        """Create a test chain to verify functionality"""
         if not self.db:
             self._add_debug_log("❌ No database available for test")
             return
@@ -740,7 +785,6 @@ class ControlPanel:
         self._add_debug_log("=" * 60)
         self._add_debug_log("🧪 TEST: Creating test chain")
         
-        # Create root node
         root_id = self.db.create_content_node(
             node_type='raw_text',
             content="Test root content",
@@ -749,7 +793,6 @@ class ControlPanel:
         )
         self._add_debug_log(f"✓ Created root node: {root_id}")
         
-        # Create child node
         child_id = self.db.create_content_node(
             node_type='response',
             content="Test child response",
@@ -759,15 +802,14 @@ class ControlPanel:
         )
         self._add_debug_log(f"✓ Created child node: {child_id}")
         
-        # Verify chain
         chain = self.db.get_content_chain(child_id)
         self._add_debug_log(f"Chain length: {len(chain)}")
         for i, node in enumerate(chain):
             self._add_debug_log(f"  [{i}] id={node['id']}, type={node['node_type']}")
         
         self._add_debug_log("=" * 60)
+    
     def _show_last_node_chain(self):
-        """Show the content chain for the last created node in debug console"""
         if not self.db:
             self._add_debug_log("❌ No database available to show chain")
             return
@@ -791,6 +833,7 @@ class ControlPanel:
                 self._add_debug_log(f"  [{i}] id={node['id']}, type={node['node_type']}, title={node['title']}")
         except Exception as e:
             self._add_debug_log(f"❌ Error fetching chain: {e}")
+    
     def _add_debug_log(self, message):
         timestamp = time.strftime("%H:%M:%S")
         log_entry = f"[{timestamp}] {message}"
@@ -798,6 +841,7 @@ class ControlPanel:
         if self.debug_console and self.debug_console.winfo_exists():
             self.debug_text.insert("end", log_entry + "\n")
             self.debug_text.see("end")
+    
     def update_ai_status(self, status_text, color):
         self.status_text = status_text
         self.root.after(0, lambda: self._update_top_line(color=color))
@@ -831,18 +875,27 @@ class ControlPanel:
             self.generate_callback(self.current_clipboard_text)
 
     def load_ai(self):
-        def task():
+        """Load AI model using unified async pattern."""
+        def worker():
             self.update_ai_status("Loading...", "orange")
-            if self.ai.manage_model("load"):
+            success = self.ai.manage_model("load")
+            if success:
                 self.update_ai_status("Loaded (VRAM Occupied)", "green")
-        threading.Thread(target=task, daemon=True).start()
+            else:
+                self.update_ai_status("Load Failed", "red")
+            return success
+        
+        self.async_worker.run_async(worker)
 
     def unload_ai(self):
-        def task():
+        def worker():
             self.update_ai_status("Unloading...", "orange")
-            if self.ai.manage_model("unload"):
+            success = self.ai.manage_model("unload")
+            if success:
                 self.update_ai_status("Unloaded (VRAM Free)", "gray")
-        threading.Thread(target=task, daemon=True).start()
+            return success
+        
+        self.async_worker.run_async(worker)
 
     def toggle_ai(self):
         if self.ai_opened:
@@ -890,7 +943,6 @@ class ControlPanel:
             self.app_callback()
 
     def _create_new_session(self):
-        """Create a new learning session from ControlPanel."""
         if self.db is None:
             popup_message("Database Missing", "Session management requires a database connection.", parent=self.root)
             return
@@ -922,7 +974,6 @@ class ControlPanel:
         ctk.CTkButton(popup, text="Create", command=create, fg_color="green").pack(pady=10)
 
     def _end_current_session(self):
-        """End the current active session from ControlPanel."""
         if self.db is None:
             popup_message("Database Missing", "Session management requires a database connection.", parent=self.root)
             return
@@ -938,7 +989,6 @@ class ControlPanel:
             popup_message("Session Ended", f"Session ended. {active['word_count']} words recorded.", parent=self.root)
 
     def _refresh_session_status(self):
-        """Update session status display in ControlPanel."""
         if self.db is None:
             self.session_status_label.configure(text="📚 No session", text_color="gray")
             return
@@ -951,7 +1001,6 @@ class ControlPanel:
             self.session_status_label.configure(text="📚 No session", text_color="gray")
 
     def _show_session_list(self):
-        """Show all sessions from ControlPanel."""
         if self.db is None:
             popup_message("Database Missing", "Session management requires a database connection.", parent=self.root)
             return
@@ -992,7 +1041,6 @@ class ControlPanel:
             ctk.CTkButton(item_frame, text="View Words", width=80, command=view_words).pack(side="right", padx=5)
 
     def _view_session_words(self, session_id: str):
-        """Show words in a specific session."""
         words = self.db.get_session_words(session_id)
         
         popup = ctk.CTkToplevel(self.root)
@@ -1015,7 +1063,6 @@ class ControlPanel:
             ctk.CTkLabel(popup, text="No words in this session yet.").pack(pady=20)
     
     def get_current_chain_context(self):
-        """Get the current chain context for new lookups/responses"""
         active_session = self.db.get_active_session() if self.db else None
         return {
             "db": self.db,
@@ -1024,17 +1071,12 @@ class ControlPanel:
         }
 
     def store_generated_response(self, user_query: str, ai_response: str, mode: str, parent_node_id=None):
-        """Store AI response as a content node, update context"""
         if not self.data_service or not self.data_service.db:
             return None
         
-        # Get current session
         session_id = self.data_service.get_active_session_id()
-        
-        # Get parent node (the query that triggered this)
         actual_parent = parent_node_id or (self.context.active_node_id if self.context else None)
         
-        # Create response node
         node_id = self.data_service.save_explanation_as_content(
             title=f"AI Response to: {user_query[:50]}",
             content=ai_response,
@@ -1050,11 +1092,11 @@ class ControlPanel:
 
     def cancel(self):
         self.done = True
+        self.async_worker.cleanup()
         self.root.destroy()
 
 
 def popup_message(title, message, is_yes_no=False, parent=None):
-    """Show popup message. Returns bool if is_yes_no=True."""
     root = parent or tk._default_root
     created_root = False
     if root is None:
@@ -1078,15 +1120,7 @@ class Long_message_popup:
              word_index=None, char_def_index=None, word_click_callback=None,
              data_service=None, db=None, session_id=None, context=None,
              generate_explanation_callback=None):
-        """
-        Args:
-            data_service: PopupDataService instance (recommended over raw db param)
-            db: (deprecated) Use data_service instead. Kept for backwards compatibility.
-            session_id: Active session ID (passed to data_service for word saves)
-            context: LearningContext with active_node_id tracking
-            generate_explanation_callback: Function to call for generating explanations (for chained popups)
-                Expected signature: callback(word, mode) -> streams response to new popup
-        """
+        
         parent = getattr(master, 'root', master)
         self.long_popup = ctk.CTkToplevel(parent)
         self.long_popup.geometry("900x550")
@@ -1096,7 +1130,6 @@ class Long_message_popup:
         self.debug = DebugLogger("Long_message_popup")
         self.debug.debug(f"Creating popup: title='{title}', context.active_node_id={context.active_node_id if context else None}, session_id={session_id}")
         
-        # Support both new (data_service) and old (db) API; prefer data_service
         if data_service:
             self.data_service = data_service
         elif db:
@@ -1111,7 +1144,9 @@ class Long_message_popup:
         self.generate_explanation_callback = generate_explanation_callback
         self.active_node_id_before_popup = self.context.active_node_id if self.context else None
         self.control_panel = master if hasattr(master, 'root') else getattr(master, 'control_panel', None)
-
+        
+        # Initialize async worker for this popup
+        self.async_worker = AsyncWorker(self.long_popup)
 
         ctk.CTkLabel(self.long_popup, text=title, font=("Mengshen-Handwritten", 24, "bold")).pack(pady=(5, 5))
         
@@ -1190,22 +1225,12 @@ class Long_message_popup:
             view_chain_btn.pack(side="right", padx=5)
 
     def _generate_for_word(self, text, mode=None, context=None):
-        """Generate explanation for a word and display in popup.
-        
-        Args:
-            text: The word to explain
-            mode: (optional) Response mode
-            context: LearningContext (uses self.context if not provided)
-        """
-        # Temporarily set control panel response mode if specified
         original_mode = None
         if mode and self.control_panel:
             original_mode = self.control_panel.response_mode
             self.control_panel.response_mode = mode
         
-        # Create a query node for this lookup
         if self.data_service and self.data_service.db:
-            # Store the query as a content node
             use_context = context or self.context
             query_node_id = use_context.create_child_node(
                 node_type='query',
@@ -1215,7 +1240,6 @@ class Long_message_popup:
             )
             print(f"📝 Created query node: {query_node_id} for text: {text}")
             
-            # Record word occurrence
             if query_node_id:
                 self.data_service.record_word_occurrence(text, query_node_id, 0, len(text))
         
@@ -1223,8 +1247,6 @@ class Long_message_popup:
             explanation = self.get_explanation(text)
             if isinstance(explanation, str):
                 explanation = (explanation,)
-            
-            # Use the same context - active_node_id is now the query node
             self._show_explanation_popup(text, explanation, context=use_context)
         finally:
             if original_mode and self.control_panel:
@@ -1232,8 +1254,6 @@ class Long_message_popup:
 
     
     def _show_explanation_popup(self, text, explanation_generator, context=None):
-        """Handles the streaming update of the popup UI."""
-        
         use_context = context or self.context
         
         print(f"🔗 Creating popup with context.active_node_id={use_context.active_node_id} for text='{text}'")
@@ -1254,32 +1274,32 @@ class Long_message_popup:
         response_popup.show()
 
     def start_streaming(self, explanation_generator, word_text):
-        """Start streaming AI response to this popup."""
-        full_explanation = ""
+        """Start streaming using unified async pattern."""
+        full_explanation = []
         
-        def stream():
+        def on_chunk(chunk):
             nonlocal full_explanation
-            try:
-                for chunk in explanation_generator:
-                    if isinstance(chunk, str) and chunk.startswith("__THINK__"):
-                        thinking = chunk[len("__THINK__"):]
-                        full_explanation += thinking
-                        self.control_panel.root.after(0, lambda t=thinking: self.append_think(t))
-                    else:
-                        full_explanation += chunk
-                        self.control_panel.root.after(0, lambda c=chunk: self.append_text(c))
-                
-                self.control_panel.root.after(0, lambda: self._setup_save_button(word_text, full_explanation))
-            except Exception as e:
-                print(f"Streaming error: {e}")
+            if isinstance(chunk, str) and chunk.startswith("__THINK__"):
+                thinking = chunk[len("__THINK__"):]
+                full_explanation.append(thinking)
+                self.append_think(thinking)
+            else:
+                full_explanation.append(chunk)
+                self.append_text(chunk)
         
-        threading.Thread(target=stream, daemon=True).start()
+        def on_complete(final_result):
+            self._setup_save_button(word_text, final_result)
+        
+        # Use the unified async worker
+        self.async_worker.run_async_generator(
+            generator_func=lambda: explanation_generator,
+            on_chunk=on_chunk,
+            on_complete=on_complete
+        )
 
     def _setup_save_button(self, word, explanation_text):
-        """Setup save button after streaming completes."""
         def save_logic():
             if self.control_panel and hasattr(self.control_panel, 'save_manager'):
-                # Store the response as a node first
                 if self.context:
                     self.context.create_child_node(
                         node_type='response',
@@ -1299,7 +1319,6 @@ class Long_message_popup:
         self.add_button("💾 Save/Update word", save_logic)
 
     def _debug_current_chain(self):
-        """Debug the current popup's chain"""
         if not self.context or not self.context.active_node_id:
             self.store_as_content_node()
         
@@ -1308,7 +1327,6 @@ class Long_message_popup:
             popup_message("Debug", f"Node {self.context.active_node_id} has chain length {len(chain)}", parent=self.long_popup)
             
     def add_button(self, text, command):
-        """Add button to popup with proper layout (visible at bottom)."""
         btn = ctk.CTkButton(self.long_popup, text=text, command=command)
         btn.pack(side="bottom", expand=True, fill="x", pady=10, padx=10)
         return btn
@@ -1323,7 +1341,6 @@ class Long_message_popup:
         self.text_box.see("end")
     
     def store_as_content_node(self):
-        """Store this popup's content as a content node using context"""
         self.debug.debug(f"Storing as content node: title={self.long_popup.title()}")
         
         if not self.data_service or not self.data_service.db:
@@ -1333,7 +1350,6 @@ class Long_message_popup:
         title = self.long_popup.title()
         content = self.text_box.get("1.0", "end-1c")
         
-        # Use context to create node (sets active_node_id automatically)
         node_id = self.context.create_child_node(
             node_type='response',
             content=content,
@@ -1342,7 +1358,6 @@ class Long_message_popup:
         )
         self.debug.info(f"Stored as node {node_id}, active_node_id now {self.context.active_node_id}")
         
-        # Record word occurrences in content
         if node_id:
             import re
             chinese_words = set(re.findall(r'[\u4e00-\u9fff]{2,}', content))
@@ -1352,12 +1367,10 @@ class Long_message_popup:
                 self.data_service.record_word_occurrence(word, node_id)
     
     def _view_chain(self):
-        """Open chain viewer for this content"""
         if not self.data_service or not self.data_service.db:
             return
         
         if not self.context or not self.context.active_node_id:
-            # Store as node first
             self.store_as_content_node()
         
         if self.context and self.context.active_node_id:
@@ -1376,6 +1389,9 @@ class ReviewFrame(ctk.CTkFrame):
         self.reviewer = reviewer
         self._setup_ui()
         self._load_words()
+        
+        # Initialize async worker for review operations
+        self.async_worker = AsyncWorker(self)
 
     def _setup_ui(self):
         ctk.CTkLabel(self, text="📚 Word Review", font=ctk.CTkFont(size=24, weight="bold")).pack(pady=10)
@@ -1421,9 +1437,14 @@ class ReviewFrame(ctk.CTkFrame):
 
     def _review(self, quality):
         if self.reviewer.has_words():
-            next_date = self.reviewer.review_current(quality)
-            tkmb.showinfo("Review Complete", f"Next review: {next_date}")
-            self._update_display()
+            def worker():
+                return self.reviewer.review_current(quality)
+            
+            def callback(next_date):
+                tkmb.showinfo("Review Complete", f"Next review: {next_date}")
+                self._update_display()
+            
+            self.async_worker.run_async(worker, callback)
 
     def _prev_word(self):
         if self.reviewer.current_index > 0:
@@ -1444,17 +1465,18 @@ class HomeFrame(ctk.CTkFrame):
         self.control_panel = control_panel
         self.is_generating = False
         
-        # Use passed indices or load them
         self.word_index = word_index if word_index is not None else {}
         self.char_def_index = char_def_index if char_def_index is not None else {}
         
-        # Only load if not provided
         if not self.word_index and not self.char_def_index:
             try:
                 from lib.ccedict import load_cedict_entries
                 _, self.word_index, _, self.char_def_index = load_cedict_entries("cedict_ts.u8")
             except Exception:
                 pass
+        
+        # Initialize async worker
+        self.async_worker = AsyncWorker(self)
         
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
@@ -1526,7 +1548,7 @@ class HomeFrame(ctk.CTkFrame):
         self.refresh_btn.configure(state="disabled")
         self.summary_btn.configure(state="disabled")
         
-        handler = StreamHandler(self, self.insight_text, self.think_challenge.think_box, self.control_panel)
+        handler = StreamHandler(self, self.insight_text, self.think_challenge.think_box, self.async_worker)
         handler.set_text("Generating challenge...")
         handler.clear_think()
         
@@ -1542,7 +1564,10 @@ class HomeFrame(ctk.CTkFrame):
             self.refresh_btn.configure(state="normal")
             self.summary_btn.configure(state="normal")
         
-        handler.stream(self.ai, f"Word Blossom Mode: {word_list}", on_complete)
+        def generator_func():
+            return self.ai.generate_response(f"Word Blossom Mode: {word_list}", self.control_panel.show_thinking)
+        
+        handler.stream_from_generator(generator_func, on_complete)
 
     def generate_summary(self):
         if self.is_generating or not self.last_words:
@@ -1551,7 +1576,7 @@ class HomeFrame(ctk.CTkFrame):
         self.is_generating = True
         self.refresh_btn.configure(state="disabled")
         
-        handler = StreamHandler(self, self.summary_text, self.think_summary.think_box, self.control_panel)
+        handler = StreamHandler(self, self.summary_text, self.think_summary.think_box, self.async_worker)
         handler.set_text("Generating summary...")
         handler.clear_think()
         
@@ -1561,7 +1586,10 @@ class HomeFrame(ctk.CTkFrame):
             self.is_generating = False
             self.refresh_btn.configure(state="normal")
         
-        handler.stream(self.ai, f"Summarize these words with Sparkle Notes Mode: {word_list}", on_complete)
+        def generator_func():
+            return self.ai.generate_response(f"Summarize these words with Sparkle Notes Mode: {word_list}", self.control_panel.show_thinking)
+        
+        handler.stream_from_generator(generator_func, on_complete)
 
     def _set_text(self, widget, text):
         widget.configure(state="normal")
@@ -1584,7 +1612,6 @@ class App(ctk.CTk):
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        # Load CEDICT indices at App level
         self.word_index = {}
         self.char_def_index = {}
         try:
@@ -1593,7 +1620,6 @@ class App(ctk.CTk):
         except Exception as e:
             print(f"Could not load CEDICT: {e}")
 
-        # Sidebar
         self.sidebar = ctk.CTkFrame(self, width=140, corner_radius=0)
         self.sidebar.grid(row=0, column=0, sticky="nsew")
         ctk.CTkLabel(self.sidebar, text="VocabMaster", font=ctk.CTkFont(size=20, weight="bold")).grid(row=0, column=0, padx=20, pady=20)
@@ -1602,7 +1628,6 @@ class App(ctk.CTk):
         ctk.CTkButton(self.sidebar, text="📖 Sentence Explorer", 
                       command=lambda: self.show_frame("explorer")).grid(row=3, column=0, padx=20, pady=10)
 
-        # Frames
         self.frames = {
             "home": HomeFrame(self, self.ai_client, self.db, control_panel=self.control_panel, 
                              word_index=self.word_index, char_def_index=self.char_def_index, 
