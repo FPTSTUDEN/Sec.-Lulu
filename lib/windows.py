@@ -11,7 +11,6 @@ from datetime import datetime
 from lib.sentence_explorer import SentenceExplorerFrame
 from lib.debug_utils import DebugLogger
 import time
-from functools import partial
 
 MODES=["Lookup Only","Sparkle Notes","Immersion Mode", "Word Blossom", "Sentence Whisper"]
 
@@ -28,96 +27,8 @@ try:
 except ImportError:
     lookup_cedict = extract_chinese_word_at_position = is_chinese_char = None
 
-# ======================
-# UNIFIED ASYNC PATTERN - Single interface for all async operations
-# ======================
-
-class AsyncWorker:
-    """
-    Unified async worker for all non-UI operations.
-    Rules:
-    1. Long operations (AI, DB writes) go in worker threads
-    2. ALL UI updates happen via root.after()
-    3. Never call UI methods directly from worker threads
-    """
-    
-    def __init__(self, root_widget):
-        self.root = root_widget
-        self._active_threads = []
-    
-    def run_async(self, worker_func, callback=None, error_callback=None):
-        """
-        Run a function in a background thread.
-        
-        Args:
-            worker_func: Function to run in background (can return a value)
-            callback: Function to call on UI thread with result
-            error_callback: Function to call on UI thread with exception
-        """
-        def wrapper():
-            try:
-                result = worker_func()
-                if callback:
-                    self.root.after(0, lambda: callback(result))
-            except Exception as e:
-                print(f"Async error: {e}")
-                if error_callback:
-                    self.root.after(0, lambda: error_callback(e))
-                else:
-                    self.root.after(0, lambda: self._show_error(e))
-        
-        thread = threading.Thread(target=wrapper, daemon=True)
-        self._active_threads.append(thread)
-        thread.start()
-        return thread
-    
-    def run_async_generator(self, generator_func, on_chunk=None, on_complete=None, on_error=None):
-        """
-        Run a generator in background (for streaming AI responses).
-        
-        Args:
-            generator_func: Function that returns a generator
-            on_chunk: Called on UI thread for each chunk (string)
-            on_complete: Called on UI thread when complete
-            on_error: Called on UI thread on error
-        """
-        def wrapper():
-            try:
-                full_result = []
-                for chunk in generator_func():
-                    full_result.append(chunk)
-                    if on_chunk:
-                        self.root.after(0, lambda c=chunk: on_chunk(c))
-                if on_complete:
-                    self.root.after(0, lambda: on_complete(''.join(full_result)))
-            except Exception as e:
-                print(f"Generator error: {e}")
-                if on_error:
-                    self.root.after(0, lambda: on_error(e))
-        
-        thread = threading.Thread(target=wrapper, daemon=True)
-        self._active_threads.append(thread)
-        thread.start()
-        return thread
-    
-    def _show_error(self, error):
-        """Show error in UI (safe to call from after)."""
-        try:
-            error_label = ctk.CTkLabel(
-                self.root, 
-                text=f"⚠️ Error: {str(error)[:100]}", 
-                text_color="red"
-            )
-            error_label.pack(pady=10)
-            self.root.after(3000, error_label.destroy)
-        except:
-            pass
-    
-    def cleanup(self):
-        """Wait for all threads to complete (optional)."""
-        for thread in self._active_threads:
-            if thread.is_alive():
-                thread.join(timeout=0.1)
+# Import unified async utilities
+from lib.async_utils import run_async, stream_to_widgets, set_widget_text, clear_widget
 
 # ======================
 # Learning Context - Single source of truth for chain tracking
@@ -145,78 +56,6 @@ class LearningContext:
         )
         self.active_node_id = node_id
         return node_id
-
-# ======================
-# SIMPLIFIED Streaming Handlers - Now using AsyncWorker
-# ======================
-
-class StreamHandler:
-    """Simplified streaming handler using AsyncWorker."""
-    def __init__(self, master, text_widget, think_widget, async_worker=None):
-        self.master = master
-        self.text_widget = text_widget
-        self.think_widget = think_widget
-        self.async_worker = async_worker or AsyncWorker(master)
-    
-    def append_text(self, text):
-        """Thread-safe text append (must be called via after)."""
-        try:
-            self.text_widget.configure(state="normal")
-            self.text_widget.insert("end", text)
-            self.text_widget.configure(state="disabled")
-            self.text_widget.see("end")
-        except:
-            pass
-    
-    def append_think(self, text):
-        """Thread-safe think append (must be called via after)."""
-        if self.think_widget:
-            try:
-                self.think_widget.configure(state="normal")
-                self.think_widget.insert("end", text)
-                self.think_widget.configure(state="disabled")
-                self.think_widget.see("end")
-            except:
-                pass
-    
-    def clear_think(self):
-        """Clear think widget (must be called via after)."""
-        if self.think_widget:
-            try:
-                self.think_widget.configure(state="normal")
-                self.think_widget.delete("1.0", "end")
-                self.think_widget.configure(state="disabled")
-            except:
-                pass
-    
-    def set_text(self, text):
-        """Replace text (must be called via after)."""
-        try:
-            self.text_widget.configure(state="normal")
-            self.text_widget.delete("1.0", "end")
-            self.text_widget.insert("1.0", text)
-            self.text_widget.configure(state="disabled")
-        except:
-            pass
-    
-    def stream_from_generator(self, generator_func, on_complete=None, display_thinking=True):
-        """Stream from a generator function using AsyncWorker."""
-        def on_chunk(chunk):
-            if display_thinking and chunk.startswith("__THINK__"):
-                thinking = chunk[len("__THINK__"):]
-                self.append_think(thinking)
-            else:
-                self.append_text(chunk)
-        
-        def on_complete_wrapper(full_result):
-            if on_complete:
-                on_complete(full_result)
-        
-        self.async_worker.run_async_generator(
-            generator_func=generator_func,
-            on_chunk=on_chunk,
-            on_complete=on_complete_wrapper
-        )
 
 # ======================
 # Service Layer (DB Operations Decoupled from UI)
@@ -561,8 +400,9 @@ class LookupPanel(ctk.CTkFrame):
                                     font=ctk.CTkFont(size=10), text_color="green")
             chain_info.pack(pady=5)
 
+
 class ThinkBox(ctk.CTkFrame):
-    """Reusable collapsible thinking box component."""
+    """Simple collapsible thinking box - UI only, no streaming logic."""
     def __init__(self, master, **kwargs):
         super().__init__(master, fg_color="transparent", **kwargs)
         self.think_visible = True
@@ -570,32 +410,34 @@ class ThinkBox(ctk.CTkFrame):
         think_header = ctk.CTkFrame(self, fg_color="transparent")
         think_header.pack(side="top", fill="x", pady=(0, 3))
         ctk.CTkLabel(think_header, text="🧠 Thinking", font=("Mengshen-Handwritten", 12, "bold")).pack(side="left")
-        self.think_toggle_btn = ctk.CTkButton(think_header, text="▲", width=25, height=20, command=self._toggle_think_box)
-        self.think_toggle_btn.pack(side="right", padx=(5, 0))
+        self.toggle_btn = ctk.CTkButton(think_header, text="▲", width=25, height=20, command=self._toggle)
+        self.toggle_btn.pack(side="right", padx=(5, 0))
 
-        self.think_box = ctk.CTkTextbox(self, wrap="word", font=("Mengshen-Handwritten", 12), height=3)
-        self.think_box.configure(state="disabled")
-        self.think_box.pack(fill="both", expand=True)
+        self.text_box = ctk.CTkTextbox(self, wrap="word", font=("Mengshen-Handwritten", 12), height=3)
+        self.text_box.configure(state="disabled")
+        self.text_box.pack(fill="both", expand=True)
 
-    def append_think(self, new_text):
-        self.think_box.configure(state="normal")
-        self.think_box.insert("end", new_text)
-        self.think_box.configure(state="disabled")
-        self.think_box.see("end")
+    def append(self, text):
+        """Append text (call from UI thread only)."""
+        self.text_box.configure(state="normal")
+        self.text_box.insert("end", text)
+        self.text_box.configure(state="disabled")
+        self.text_box.see("end")
 
-    def _toggle_think_box(self):
+    def clear(self):
+        """Clear text (call from UI thread only)."""
+        self.text_box.configure(state="normal")
+        self.text_box.delete("1.0", "end")
+        self.text_box.configure(state="disabled")
+
+    def _toggle(self):
         self.think_visible = not self.think_visible
         if self.think_visible:
-            self.think_box.pack(fill="both", expand=True)
-            self.think_toggle_btn.configure(text="▲")
+            self.text_box.pack(fill="both", expand=True)
+            self.toggle_btn.configure(text="▲")
         else:
-            self.think_box.pack_forget()
-            self.think_toggle_btn.configure(text="▼")
-
-    def clear_think(self):
-        self.think_box.configure(state="normal")
-        self.think_box.delete("1.0", "end")
-        self.think_box.configure(state="disabled")
+            self.text_box.pack_forget()
+            self.toggle_btn.configure(text="▼")
 
 
 class ControlPanel:
@@ -608,9 +450,6 @@ class ControlPanel:
         self.data_service = data_service or PopupDataService(db)
         self.context = context or LearningContext(db)
         self.context.current_mode = MODES[1]
-        
-        # Initialize async worker
-        self.async_worker = None  # Will be set after root exists
         
         self.ai_opened = True
         self.opened = False
@@ -625,7 +464,6 @@ class ControlPanel:
         self.show_thinking = True
         
         self.root = ctk.CTk()
-        self.async_worker = AsyncWorker(self.root)  # Initialize after root exists
         self.root.title("Monitor")
         self.root.resizable(width=True, height=True)
         self.root.wm_attributes("-topmost", True)
@@ -877,25 +715,29 @@ class ControlPanel:
     def load_ai(self):
         """Load AI model using unified async pattern."""
         def worker():
-            self.update_ai_status("Loading...", "orange")
-            success = self.ai.manage_model("load")
+            return self.ai.manage_model("load")
+        
+        def on_done(success):
             if success:
                 self.update_ai_status("Loaded (VRAM Occupied)", "green")
             else:
                 self.update_ai_status("Load Failed", "red")
-            return success
         
-        self.async_worker.run_async(worker)
+        self.update_ai_status("Loading...", "orange")
+        run_async(self.root, worker, on_done)
 
     def unload_ai(self):
         def worker():
-            self.update_ai_status("Unloading...", "orange")
-            success = self.ai.manage_model("unload")
+            return self.ai.manage_model("unload")
+        
+        def on_done(success):
             if success:
                 self.update_ai_status("Unloaded (VRAM Free)", "gray")
-            return success
+            else:
+                self.update_ai_status("Unload Failed", "red")
         
-        self.async_worker.run_async(worker)
+        self.update_ai_status("Unloading...", "orange")
+        run_async(self.root, worker, on_done)
 
     def toggle_ai(self):
         if self.ai_opened:
@@ -1092,7 +934,6 @@ class ControlPanel:
 
     def cancel(self):
         self.done = True
-        self.async_worker.cleanup()
         self.root.destroy()
 
 
@@ -1144,9 +985,6 @@ class Long_message_popup:
         self.generate_explanation_callback = generate_explanation_callback
         self.active_node_id_before_popup = self.context.active_node_id if self.context else None
         self.control_panel = master if hasattr(master, 'root') else getattr(master, 'control_panel', None)
-        
-        # Initialize async worker for this popup
-        self.async_worker = AsyncWorker(self.long_popup)
 
         ctk.CTkLabel(self.long_popup, text=title, font=("Mengshen-Handwritten", 24, "bold")).pack(pady=(5, 5))
         
@@ -1198,7 +1036,7 @@ class Long_message_popup:
         if lookup_cedict and extract_chinese_word_at_position:
             self.lookup_panel.bind_text_box(self.input_box)
             self.lookup_panel.bind_text_box(self.text_box)
-            self.lookup_panel.bind_text_box(self.think_component.think_box)
+            self.lookup_panel.bind_text_box(self.think_component.text_box)
         
         if self.data_service and self.data_service.db:
             chain_btn = ctk.CTkButton(self.long_popup, text="🔗 View Chain", width=100,
@@ -1273,41 +1111,34 @@ class Long_message_popup:
         response_popup.start_streaming(explanation_generator, text)
         response_popup.show()
 
-    def start_streaming(self, explanation_generator, word_text):
-        """Start streaming using unified async pattern."""
-        full_explanation = []
+    def start_streaming(self, generator, word_text):
+        """Start streaming using unified async function."""
+        def on_complete(full_text):
+            self._on_stream_complete(word_text, full_text)
         
-        def on_chunk(chunk):
-            nonlocal full_explanation
-            if isinstance(chunk, str) and chunk.startswith("__THINK__"):
-                thinking = chunk[len("__THINK__"):]
-                full_explanation.append(thinking)
-                self.append_think(thinking)
-            else:
-                full_explanation.append(chunk)
-                self.append_text(chunk)
-        
-        def on_complete(final_result):
-            self._setup_save_button(word_text, final_result)
-        
-        # Use the unified async worker
-        self.async_worker.run_async_generator(
-            generator_func=lambda: explanation_generator,
-            on_chunk=on_chunk,
-            on_complete=on_complete
+        stream_to_widgets(
+            root=self.long_popup,
+            generator=generator,
+            text_widget=self.text_box,
+            think_widget=self.think_component.text_box,
+            on_complete=on_complete,
+            show_thinking=self.control_panel.show_thinking if self.control_panel else True
         )
+
+    def _on_stream_complete(self, word, full_text):
+        """Called when streaming finishes."""
+        if self.context:
+            self.context.create_child_node(
+                node_type='response',
+                content=full_text,
+                title=f"Response to: {word}",
+                metadata={"source": "ai_explanation"}
+            )
+        self._setup_save_button(word, full_text)
 
     def _setup_save_button(self, word, explanation_text):
         def save_logic():
             if self.control_panel and hasattr(self.control_panel, 'save_manager'):
-                if self.context:
-                    self.context.create_child_node(
-                        node_type='response',
-                        content=explanation_text,
-                        title=f"Response to: {word}",
-                        metadata={"source": "ai_explanation"}
-                    )
-                
                 word_id = self.control_panel.save_manager.save_word_with_prompt(
                     word, 
                     explanation_text
@@ -1330,15 +1161,6 @@ class Long_message_popup:
         btn = ctk.CTkButton(self.long_popup, text=text, command=command)
         btn.pack(side="bottom", expand=True, fill="x", pady=10, padx=10)
         return btn
-    
-    def append_think(self, new_text):
-        self.think_component.append_think(new_text)
-    
-    def append_text(self, new_text):
-        self.text_box.configure(state="normal")
-        self.text_box.insert("end", new_text)
-        self.text_box.configure(state="disabled")
-        self.text_box.see("end")
     
     def store_as_content_node(self):
         self.debug.debug(f"Storing as content node: title={self.long_popup.title()}")
@@ -1389,9 +1211,6 @@ class ReviewFrame(ctk.CTkFrame):
         self.reviewer = reviewer
         self._setup_ui()
         self._load_words()
-        
-        # Initialize async worker for review operations
-        self.async_worker = AsyncWorker(self)
 
     def _setup_ui(self):
         ctk.CTkLabel(self, text="📚 Word Review", font=ctk.CTkFont(size=24, weight="bold")).pack(pady=10)
@@ -1440,11 +1259,11 @@ class ReviewFrame(ctk.CTkFrame):
             def worker():
                 return self.reviewer.review_current(quality)
             
-            def callback(next_date):
+            def on_done(next_date):
                 tkmb.showinfo("Review Complete", f"Next review: {next_date}")
                 self._update_display()
             
-            self.async_worker.run_async(worker, callback)
+            run_async(self, worker, on_done)
 
     def _prev_word(self):
         if self.reviewer.current_index > 0:
@@ -1474,9 +1293,6 @@ class HomeFrame(ctk.CTkFrame):
                 _, self.word_index, _, self.char_def_index = load_cedict_entries("cedict_ts.u8")
             except Exception:
                 pass
-        
-        # Initialize async worker
-        self.async_worker = AsyncWorker(self)
         
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
@@ -1535,7 +1351,7 @@ class HomeFrame(ctk.CTkFrame):
             tkmb.showwarning("In Progress", "Already generating. Please wait.")
             return
         if not self.ai or not self.db:
-            self._set_text(self.insight_text, "❌ AI Client or Database not available")
+            set_widget_text(self.insight_text, "❌ AI Client or Database not available")
             return
 
         try:
@@ -1548,26 +1364,35 @@ class HomeFrame(ctk.CTkFrame):
         self.refresh_btn.configure(state="disabled")
         self.summary_btn.configure(state="disabled")
         
-        handler = StreamHandler(self, self.insight_text, self.think_challenge.think_box, self.async_worker)
-        handler.set_text("Generating challenge...")
-        handler.clear_think()
+        set_widget_text(self.insight_text, "Generating challenge...")
+        clear_widget(self.think_challenge.text_box)
         
         word_list = ", ".join([w[1] for w in self.last_words]) if self.last_words else ""
         if not word_list:
-            handler.set_text("No words in database yet. Add some words first!")
+            set_widget_text(self.insight_text, "No words in database yet. Add some words first!")
             self.is_generating = False
             self.refresh_btn.configure(state="normal")
             return
         
-        def on_complete():
+        def generator():
+            return self.ai.generate_response(
+                f"Word Blossom Mode: {word_list}",
+                self.control_panel.show_thinking if self.control_panel else True
+            )
+        
+        def on_complete(_):
             self.is_generating = False
             self.refresh_btn.configure(state="normal")
             self.summary_btn.configure(state="normal")
         
-        def generator_func():
-            return self.ai.generate_response(f"Word Blossom Mode: {word_list}", self.control_panel.show_thinking)
-        
-        handler.stream_from_generator(generator_func, on_complete)
+        stream_to_widgets(
+            root=self,
+            generator=generator(),
+            text_widget=self.insight_text,
+            think_widget=self.think_challenge.text_box,
+            on_complete=on_complete,
+            show_thinking=self.control_panel.show_thinking if self.control_panel else True
+        )
 
     def generate_summary(self):
         if self.is_generating or not self.last_words:
@@ -1576,26 +1401,29 @@ class HomeFrame(ctk.CTkFrame):
         self.is_generating = True
         self.refresh_btn.configure(state="disabled")
         
-        handler = StreamHandler(self, self.summary_text, self.think_summary.think_box, self.async_worker)
-        handler.set_text("Generating summary...")
-        handler.clear_think()
+        set_widget_text(self.summary_text, "Generating summary...")
+        clear_widget(self.think_summary.text_box)
         
         word_list = ", ".join([w[1] for w in self.last_words])
         
-        def on_complete():
+        def generator():
+            return self.ai.generate_response(
+                f"Summarize these words with Sparkle Notes Mode: {word_list}",
+                self.control_panel.show_thinking if self.control_panel else True
+            )
+        
+        def on_complete(_):
             self.is_generating = False
             self.refresh_btn.configure(state="normal")
         
-        def generator_func():
-            return self.ai.generate_response(f"Summarize these words with Sparkle Notes Mode: {word_list}", self.control_panel.show_thinking)
-        
-        handler.stream_from_generator(generator_func, on_complete)
-
-    def _set_text(self, widget, text):
-        widget.configure(state="normal")
-        widget.delete("1.0", "end")
-        widget.insert("1.0", text)
-        widget.configure(state="disabled")
+        stream_to_widgets(
+            root=self,
+            generator=generator(),
+            text_widget=self.summary_text,
+            think_widget=self.think_summary.text_box,
+            on_complete=on_complete,
+            show_thinking=self.control_panel.show_thinking if self.control_panel else True
+        )
 
 
 class App(ctk.CTk):

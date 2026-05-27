@@ -6,15 +6,14 @@ Properly handles multiple Tkinter event loops without blocking
 import os
 import threading
 import pyperclip
-import requests
 import time
-from PIL import Image
-from lib.windows import ControlPanel, App, Long_message_popup, PopupDataService, PopupSaveManager, LearningContext, AsyncWorker
+from lib.windows import ControlPanel, App, Long_message_popup, PopupDataService, PopupSaveManager, LearningContext
 from lib.reviewer import WordReviewer
 from lib.db import VocabDatabase
-from lib.learner_prompts import get_prompt, prompt_generator_for_mode
+from lib.learner_prompts import prompt_generator_for_mode
 from lib.localai import OllamaClient
 from lib.ccedict import load_cedict_entries, lookup_cedict
+from lib.async_utils import run_async
 from mock_database_generator import MockDatabaseGenerator
 
 MAX_CLIPBOARD_TEXT_LEN = 180
@@ -45,7 +44,6 @@ class IntegratedApp:
         self.char_def_index = char_def_index
         self.data_service = None
         self.save_manager = None
-        self.async_worker = None  # Will be initialized after control panel
     
     def launch_vocab_app(self):
         if self.app_thread and self.app_thread.is_alive():
@@ -71,7 +69,7 @@ class IntegratedApp:
             self.app_window = None
     
     def get_explanation_generator(self, text):
-        """Returns a generator for streaming AI response."""
+        """Returns a generator function for streaming AI response."""
         db = self.db_cls(self.db_path)
         
         try:
@@ -89,7 +87,6 @@ class IntegratedApp:
                 mode = "Sparkle Notes"
 
             if mode == "Lookup Only":
-                # Return a generator directly (not a function)
                 word_match, char_matches = lookup_cedict(text, self.word_index, self.char_def_index)
                 if word_match:
                     result = f"{word_match['simplified']} ({word_match['traditional']}), Definitions: {'; '.join(word_match['definitions'])}"
@@ -101,10 +98,9 @@ class IntegratedApp:
                 else:
                     result = f"No direct match found for '{text}'."
                 
-                # Return generator directly
-                def single_chunk_generator():
+                def single_chunk():
                     yield result
-                return single_chunk_generator()
+                return single_chunk
 
             print(f"Generating {mode} explanation for '{text}'...")
             base_prompt_fn = prompt_generator_for_mode(mode)
@@ -118,14 +114,15 @@ class IntegratedApp:
 
             display_thinking = getattr(self.control_panel, 'show_thinking', True)
             
-            # Return the generator directly (not wrapped in lambda)
-            return lambda: self.ai.generate_response(
-                prompt_fn_with_session(text, frequency), 
-                display_thinking
-            )
+            def generator():
+                return self.ai.generate_response(
+                    prompt_fn_with_session(text, frequency), 
+                    display_thinking
+                )
+            return generator
         finally:
             db.close()
-                
+    
     def _generate_for_word(self, text, mode=None, context=None):
         original_mode = None
         if mode and self.control_panel:
@@ -157,20 +154,11 @@ class IntegratedApp:
             generate_explanation_callback=self._generate_for_word
         )
         
-        # generator_func is already a generator, call it to get the generator
-        # But wait - get_explanation_generator returns a FUNCTION that returns a generator
-        # Let's check what we actually have...
-        if callable(generator_func):
-            # It's a function that returns a generator
-            generator = generator_func()
-        else:
-            # It's already a generator
-            generator = generator_func
-        
-        # Start streaming using the generator
+        # Call generator_func to get the actual generator, then pass it
+        generator = generator_func()
         response_popup.start_streaming(generator, text)
         response_popup.show()
-
+    
     def _poll_clipboard(self):
         if not self.control_panel or getattr(self.control_panel, "done", False):
             return
@@ -225,7 +213,11 @@ class IntegratedApp:
     def run(self):
         try:
             os.chdir(os.path.dirname(os.path.abspath(__file__)))
-            threading.Thread(target=lambda: self.ai.manage_model("load"), daemon=True).start()
+            
+            # Start pre-loading AI in background
+            def preload_ai():
+                self.ai.manage_model("load")
+            threading.Thread(target=preload_ai, daemon=True).start()
             
             if self.database is None:
                 self.database = self.db_cls(self.db_path)
@@ -243,8 +235,6 @@ class IntegratedApp:
                 context=self.context
             )
             
-            self.async_worker = AsyncWorker(self.control_panel.root)
-            
             self.save_manager = PopupSaveManager(self.data_service, parent_widget=self.control_panel.root, context=self.context)
             
             self.control_panel.generate_callback = self._generate_for_word
@@ -256,16 +246,13 @@ class IntegratedApp:
             print("Click 'Open Main App' to launch the vocabulary reviewer")
             print("=" * 50)
             
-            def initial_load():
-                self.control_panel.update_ai_status("Loading Model...", "orange")
-                if self.ai.manage_model("load"):
-                    self.control_panel.update_ai_status("Ready (GPU)", "green")
-                else:
-                    self.control_panel.update_ai_status("Load Failed", "red")
+            def update_ai_status():
+                self.control_panel.update_ai_status("Ready (GPU)", "green")
             
-            threading.Thread(target=initial_load, daemon=True).start()
+            # Use run_async for AI status update
+            run_async(self.control_panel.root, lambda: None, on_done=lambda _: update_ai_status())
+            
             self.control_panel.root.after(0, self._poll_clipboard)
-            
             self.control_panel.show()
             
             if self.app_thread and self.app_thread.is_alive():
