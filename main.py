@@ -1,6 +1,6 @@
 """
 Integrated application combining ControlPanel and Vocabulary Learning App
-Properly handles multiple Tkinter event loops without blocking
+Uses simplified node-based database API.
 """
 
 import os
@@ -14,26 +14,22 @@ from lib.learner_prompts import prompt_generator_for_mode
 from lib.localai import OllamaClient
 from lib.ccedict import load_cedict_entries, lookup_cedict
 from lib.async_utils import run_async
-from mock_database_generator import MockDatabaseGenerator
 
 MAX_CLIPBOARD_TEXT_LEN = 180
 
 # Load CEDICT entries and build indices at startup
 _, word_index, char_index, char_def_index = load_cedict_entries("cedict_ts.u8")
 
+
 class IntegratedApp:
     """Main application that coordinates ControlPanel and VocabApp"""
     
-    def __init__(self, db_path="vocab.db", use_mock=False):
-        if use_mock and db_path == "vocab.db":
-            db_path = "mock_vocab.db"
-
+    def __init__(self, db_path="vocab.db"):
         self.db_path = db_path
-        self.use_mock = use_mock
         self.database = None
         self.context = None
-        self.db_cls = MockDatabaseGenerator if use_mock else VocabDatabase
-        self.reviewer = WordReviewer(db_path, db_cls=self.db_cls)
+        self.db_cls = VocabDatabase
+        self.reviewer = None
         self.app_window = None
         self.app_thread = None
         self.last_clipboard_text = ""
@@ -57,9 +53,10 @@ class IntegratedApp:
     
     def _run_vocab_app(self):
         try:
-            reviewer = WordReviewer(self.db_path, db_cls=self.db_cls)
-            db = self.db_cls(self.db_path)
-            self.app_window = App(reviewer, ai_client=self.ai, db=db, control_panel=self.control_panel, context=self.context)
+            self.reviewer = WordReviewer(self.db_path, db_cls=self.db_cls)
+            self.database = self.db_cls(self.db_path)
+            self.app_window = App(self.reviewer, ai_client=self.ai, db=self.database, 
+                                 control_panel=self.control_panel, context=self.context)
             self.app_window.mainloop()
         except Exception as e:
             print(f"Error launching app: {e}")
@@ -73,11 +70,10 @@ class IntegratedApp:
         db = self.db_cls(self.db_path)
         
         try:
-            wordid = db.get_word_id(text)
-            if wordid:
-                db.update_review(wordid, 3)
-                word_stats = db.get_word_stats(wordid)
-                frequency = word_stats.get("review_count", 1) if word_stats else 1
+            word_node = db.get_word(text)
+            if word_node:
+                db.update_word_review(word_node['id'], 3)
+                frequency = word_node.get('review_count', 1)
             else:
                 frequency = 1
             
@@ -225,7 +221,8 @@ class IntegratedApp:
             self.data_service = PopupDataService(self.database)
             
             self.context = LearningContext(self.database)
-            self.context.active_session_id = self.data_service.get_active_session_id()
+            active = self.database.get_active_session()
+            self.context.active_session_id = active['id'] if active else None
             
             self.control_panel = ControlPanel(
                 app_callback=self.launch_vocab_app,
@@ -271,14 +268,12 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Integrated vocab app")
-    parser.add_argument("--use-mock", action="store_true",
-                        help="Use the mock database implementation")
     parser.add_argument("--db-path", default="vocab.db",
-                        help="Path to database file (overrides default)")
+                        help="Path to database file")
     args = parser.parse_args()
 
-    app = IntegratedApp(db_path=args.db_path, use_mock=args.use_mock)
-    print(f"Using {'mock' if args.use_mock else 'real'} database at {app.db_path}")
+    app = IntegratedApp(db_path=args.db_path)
+    print(f"Using database at {app.db_path}")
     app.run()
 
 
