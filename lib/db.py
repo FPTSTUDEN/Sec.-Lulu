@@ -1,16 +1,13 @@
 """
-Ultra-minimal vocabulary database with backward compatibility.
-Single-table design: everything is a node.
-Old method names are preserved as wrappers.
+Unified node-based database API.
+Everything is a node. Clean and simple.
 """
 
 import sqlite3
-import uuid
 import time
 import threading
-from typing import List, Tuple, Optional, Dict
+from typing import List, Optional, Dict, Any
 from datetime import datetime
-import json
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -18,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class VocabDatabase:
-    """Unified interface - everything is a node. Backward compatible."""
+    """Unified node-based database. Every piece of content is a node."""
 
     def __init__(self, db_path: str = "vocab.db"):
         self.db_path = db_path
@@ -26,7 +23,6 @@ class VocabDatabase:
         self._init_schema()
 
     def _get_connection(self):
-        """Get thread-local database connection."""
         if not hasattr(self._local, 'conn') or self._local.conn is None:
             self._local.conn = sqlite3.connect(self.db_path)
             self._local.conn.row_factory = sqlite3.Row
@@ -36,19 +32,18 @@ class VocabDatabase:
         return self._get_connection().cursor()
 
     def _init_schema(self):
-        """Create the single-table schema."""
+        """Create the unified nodes table."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        # The one table to rule them all
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS nodes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                type TEXT NOT NULL,
+                node_type TEXT NOT NULL,
                 content TEXT,
+                title TEXT,
                 parent_id INTEGER,
                 session_id INTEGER,
-                title TEXT,
                 created_at INTEGER,
                 translation TEXT,
                 priority INTEGER DEFAULT 2,
@@ -57,16 +52,15 @@ class VocabDatabase:
                 ease_factor REAL DEFAULT 2.5,
                 interval INTEGER DEFAULT 1,
                 next_review INTEGER,
-                example_sentence TEXT,
-                FOREIGN KEY(parent_id) REFERENCES nodes(id),
-                FOREIGN KEY(session_id) REFERENCES nodes(id)
+                metadata TEXT,
+                FOREIGN KEY(parent_id) REFERENCES nodes(id)
             )
         """)
 
-        # Indexes for performance
+        # Indexes
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_parent ON nodes(parent_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_session ON nodes(session_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_type ON nodes(type)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_type ON nodes(node_type)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_created ON nodes(created_at)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_next_review ON nodes(next_review)")
 
@@ -74,59 +68,35 @@ class VocabDatabase:
         conn.close()
         logger.info("Database schema initialized")
 
-    # ===== CORE NODE OPERATIONS =====
+    # ========== CORE NODE OPERATIONS ==========
 
     def create_node(self, node_type: str, content: str = "", title: str = None,
                     parent_id: int = None, session_id: int = None,
-                    translation: str = None, priority: int = 2, tags: List[str] = None,
-                    example_sentence: str = None) -> int:
-        """Create any node. Returns node ID."""
+                    translation: str = None, priority: int = 2,
+                    tags: List[str] = None, metadata: Dict = None) -> int:
+        """Create a node. Returns node ID."""
         now = int(time.time())
         tags_str = ",".join(tags) if tags else None
+        metadata_str = str(metadata) if metadata else None
+        
         cursor = self._get_cursor()
-
         cursor.execute("""
-            INSERT INTO nodes (type, content, title, parent_id, session_id, created_at,
-                              translation, priority, tags, example_sentence,
-                              review_count, ease_factor, interval, next_review)
+            INSERT INTO nodes (node_type, content, title, parent_id, session_id, created_at,
+                              translation, priority, tags, metadata, review_count, ease_factor, interval, next_review)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (node_type, content[:5000] if content else None, title, parent_id, session_id, now,
-              translation, priority, tags_str, example_sentence,
-              0, 2.5, 1, now + 86400))
-
+              translation, priority, tags_str, metadata_str, 0, 2.5, 1, now + 86400))
+        
         node_id = cursor.lastrowid
         self._get_connection().commit()
         return node_id
 
     def get_node(self, node_id: int) -> Optional[Dict]:
-        """Get a node by ID."""
+        """Get node by ID."""
         cursor = self._get_cursor()
-        cursor.execute("""
-            SELECT id, type, content, title, parent_id, session_id, created_at,
-                   translation, priority, tags, example_sentence,
-                   review_count, ease_factor, interval, next_review
-            FROM nodes WHERE id = ?
-        """, (node_id,))
+        cursor.execute("SELECT * FROM nodes WHERE id = ?", (node_id,))
         row = cursor.fetchone()
-        if not row:
-            return None
-        return {
-            "id": row[0],
-            "type": row[1],
-            "content": row[2],
-            "title": row[3],
-            "parent_id": row[4],
-            "session_id": row[5],
-            "created_at": row[6],
-            "translation": row[7],
-            "priority": row[8],
-            "tags": row[9].split(",") if row[9] else [],
-            "example_sentence": row[10],
-            "review_count": row[11],
-            "ease_factor": row[12],
-            "interval": row[13],
-            "next_review": row[14]
-        }
+        return dict(row) if row else None
 
     def update_node(self, node_id: int, **kwargs):
         """Update node fields."""
@@ -136,6 +106,8 @@ class VocabDatabase:
         for key, value in kwargs.items():
             if key == 'tags' and isinstance(value, list):
                 value = ",".join(value)
+            if key == 'metadata' and isinstance(value, dict):
+                value = str(value)
             fields.append(f"{key} = ?")
             values.append(value)
         if not fields:
@@ -145,85 +117,126 @@ class VocabDatabase:
         self._get_connection().commit()
 
     def delete_node(self, node_id: int):
-        """Delete a node and all its children."""
+        """Delete node and all descendants."""
         cursor = self._get_cursor()
         cursor.execute("DELETE FROM nodes WHERE id = ? OR parent_id = ?", (node_id, node_id))
         self._get_connection().commit()
 
-    # ===== BACKWARD COMPATIBLE: WORD METHODS =====
+    # ========== QUERY METHODS ==========
 
-    def add_word(self, word: str, translation: str, example: str = "") -> str:
-        """Backward compatible: add word returns string ID."""
-        node_id = self.create_node('word', content=word, translation=translation,
-                                   example_sentence=example, title=word)
-        return str(node_id)
-
-    def get_word_id(self, word: str) -> Optional[str]:
-        """Backward compatible: get word ID as string."""
+    def get_children(self, node_id: int, node_type: str = None) -> List[Dict]:
+        """Get children of a node."""
         cursor = self._get_cursor()
-        cursor.execute("SELECT id FROM nodes WHERE type = 'word' AND content = ?", (word,))
-        row = cursor.fetchone()
-        return str(row[0]) if row else None
+        if node_type:
+            cursor.execute("""
+                SELECT * FROM nodes WHERE parent_id = ? AND node_type = ?
+                ORDER BY created_at ASC
+            """, (node_id, node_type))
+        else:
+            cursor.execute("""
+                SELECT * FROM nodes WHERE parent_id = ?
+                ORDER BY created_at ASC
+            """, (node_id,))
+        return [dict(row) for row in cursor.fetchall()]
 
-    def get_due_words(self) -> List[Tuple]:
-        """Backward compatible: returns list of tuples with full word data."""
+    def get_parent(self, node_id: int) -> Optional[Dict]:
+        """Get parent of a node."""
+        node = self.get_node(node_id)
+        if not node or not node.get('parent_id'):
+            return None
+        return self.get_node(node['parent_id'])
+
+    def get_chain(self, node_id: int) -> List[Dict]:
+        """Get full chain from root to node."""
+        cursor = self._get_cursor()
+        cursor.execute("""
+            WITH RECURSIVE chain AS (
+                SELECT * FROM nodes WHERE id = ?
+                UNION ALL
+                SELECT n.* FROM nodes n JOIN chain c ON n.id = c.parent_id
+            )
+            SELECT * FROM chain ORDER BY created_at ASC
+        """, (node_id,))
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_recent_nodes(self, limit: int = 20, node_type: str = None) -> List[Dict]:
+        """Get most recent nodes."""
+        cursor = self._get_cursor()
+        if node_type:
+            cursor.execute("""
+                SELECT * FROM nodes WHERE node_type = ?
+                ORDER BY created_at DESC LIMIT ?
+            """, (node_type, limit))
+        else:
+            cursor.execute("SELECT * FROM nodes ORDER BY created_at DESC LIMIT ?", (limit,))
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_last_node_id(self) -> Optional[int]:
+        """Get most recent node ID."""
+        cursor = self._get_cursor()
+        cursor.execute("SELECT id FROM nodes ORDER BY created_at DESC LIMIT 1")
+        row = cursor.fetchone()
+        return row['id'] if row else None
+
+    # ========== WORD-RELATED METHODS (Convenience wrappers) ==========
+
+    def create_word(self, word: str, translation: str, example: str = "",
+                    session_id: int = None, parent_id: int = None) -> int:
+        """Create a word node."""
+        return self.create_node(
+            node_type='word',
+            content=word,
+            title=word,
+            translation=translation,
+            example_sentence=example,
+            session_id=session_id,
+            parent_id=parent_id
+        )
+
+    def get_word(self, word: str) -> Optional[Dict]:
+        """Get word node by word text."""
+        cursor = self._get_cursor()
+        cursor.execute("SELECT * FROM nodes WHERE node_type = 'word' AND content = ?", (word,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def get_word_id(self, word: str) -> Optional[int]:
+        """Get word ID by word text."""
+        cursor = self._get_cursor()
+        cursor.execute("SELECT id FROM nodes WHERE node_type = 'word' AND content = ?", (word,))
+        row = cursor.fetchone()
+        return row['id'] if row else None
+
+    def get_due_words(self, limit: int = 50) -> List[Dict]:
+        """Get words due for review."""
         now = int(time.time())
         cursor = self._get_cursor()
         cursor.execute("""
-            SELECT id, content, translation, example_sentence, created_at,
-                   review_count, ease_factor, interval, next_review
-            FROM nodes
-            WHERE type = 'word' AND (next_review <= ? OR next_review IS NULL)
-            ORDER BY next_review ASC
-        """, (now,))
-        rows = cursor.fetchall()
-        # Convert to tuple format expected by old code
-        return [tuple(row) for row in rows]
+            SELECT * FROM nodes
+            WHERE node_type = 'word' AND (next_review <= ? OR next_review IS NULL)
+            ORDER BY next_review ASC LIMIT ?
+        """, (now, limit))
+        return [dict(row) for row in cursor.fetchall()]
 
-    def get_recent_words(self, limit: int = 5) -> List[Tuple]:
-        """Backward compatible: returns list of tuples."""
+    def get_recent_words(self, limit: int = 10) -> List[Dict]:
+        """Get most recently added words."""
         cursor = self._get_cursor()
         cursor.execute("""
-            SELECT id, content, translation, example_sentence, created_at,
-                   review_count, ease_factor, interval, next_review
-            FROM nodes
-            WHERE type = 'word'
-            ORDER BY created_at DESC
-            LIMIT ?
+            SELECT * FROM nodes
+            WHERE node_type = 'word'
+            ORDER BY created_at DESC LIMIT ?
         """, (limit,))
-        rows = cursor.fetchall()
-        return [tuple(row) for row in rows]
+        return [dict(row) for row in cursor.fetchall()]
 
-    def get_word_stats(self, word_id: str) -> Dict:
-        """Backward compatible: get word stats."""
-        cursor = self._get_cursor()
-        cursor.execute("""
-            SELECT review_count, ease_factor, interval, next_review
-            FROM nodes WHERE id = ? AND type = 'word'
-        """, (int(word_id),))
-        row = cursor.fetchone()
-        if not row:
-            return {}
-        return {
-            "review_count": row[0],
-            "ease_factor": row[1],
-            "interval": row[2],
-            "next_review": datetime.fromtimestamp(row[3]).strftime('%Y-%m-%d %H:%M:%S') if row[3] else None
-        }
-
-    def update_review(self, word_id: str, quality: int) -> Optional[str]:
-        """Backward compatible: update review using SM-2."""
-        cursor = self._get_cursor()
-        cursor.execute("""
-            SELECT review_count, ease_factor, interval, next_review
-            FROM nodes WHERE id = ? AND type = 'word'
-        """, (int(word_id),))
-        row = cursor.fetchone()
-        if not row:
+    def update_word_review(self, word_id: int, quality: int) -> str:
+        """Update review using SM-2 algorithm. Returns next review date."""
+        node = self.get_node(word_id)
+        if not node:
             return None
 
-        review_count, ease_factor, interval, _ = row
-        review_count += 1
+        review_count = node['review_count'] + 1
+        ease_factor = node['ease_factor']
+        interval = node['interval']
 
         if quality < 3:
             interval = 1
@@ -239,202 +252,98 @@ class VocabDatabase:
                 ease_factor = 1.3
 
         next_review = int(time.time()) + interval * 86400
-
-        cursor.execute("""
-            UPDATE nodes
-            SET review_count = ?, ease_factor = ?, interval = ?, next_review = ?
-            WHERE id = ?
-        """, (review_count, ease_factor, interval, next_review, int(word_id)))
-        self._get_connection().commit()
-
+        
+        self.update_node(word_id,
+                        review_count=review_count,
+                        ease_factor=ease_factor,
+                        interval=interval,
+                        next_review=next_review)
+        
         return datetime.fromtimestamp(next_review).strftime('%Y-%m-%d')
 
-    def reset_all_reviews(self):
-        """Reset all review statistics."""
-        now = int(time.time())
-        cursor = self._get_cursor()
-        cursor.execute("""
-            UPDATE nodes
-            SET review_count = 0, ease_factor = 2.5, interval = 1, next_review = ?
-            WHERE type = 'word'
-        """, (now + 86400,))
-        self._get_connection().commit()
+    # ========== SESSION METHODS ==========
 
-    def delete_all_words(self):
-        """Delete all word nodes."""
-        cursor = self._get_cursor()
-        cursor.execute("DELETE FROM nodes WHERE type = 'word'")
-        self._get_connection().commit()
-
-    # ===== BACKWARD COMPATIBLE: SESSION METHODS =====
-
-    def create_session(self, session_type: str, source_name: str = None) -> str:
-        """Backward compatible: create session returns session_id string."""
+    def create_session(self, session_type: str, source_name: str = None) -> int:
+        """Create a session node."""
         title = f"{session_type}: {source_name}" if source_name else session_type
-        node_id = self.create_node('session', title=title, content=title)
-        return f"session_{node_id}"
+        return self.create_node('session', content=title, title=title)
 
     def get_active_session(self) -> Optional[Dict]:
-        """Backward compatible: get most recently used session."""
+        """Get most recent session."""
         cursor = self._get_cursor()
         cursor.execute("""
-            SELECT id, title, created_at
-            FROM nodes
-            WHERE type = 'session'
-            ORDER BY created_at DESC
-            LIMIT 1
+            SELECT * FROM nodes WHERE node_type = 'session'
+            ORDER BY created_at DESC LIMIT 1
         """)
         row = cursor.fetchone()
         if not row:
             return None
+        
+        session = dict(row)
         # Count words in this session
-        cursor2 = self._get_cursor()
-        cursor2.execute("SELECT COUNT(*) FROM nodes WHERE session_id = ? AND type = 'word'", (row[0],))
-        word_count = cursor2.fetchone()[0]
-        return {
-            "session_id": f"session_{row[0]}",
-            "session_type": row[1].split(":")[0] if row[1] else "General",
-            "source_name": row[1].split(":")[1] if row[1] and ":" in row[1] else None,
-            "start_time": row[2],
-            "word_count": word_count
-        }
+        cursor.execute("SELECT COUNT(*) FROM nodes WHERE session_id = ? AND node_type = 'word'", (session['id'],))
+        session['word_count'] = cursor.fetchone()[0]
+        return session
 
-    def end_session(self, session_id: str):
-        """Backward compatible: no-op (sessions don't end in minimal schema)."""
-        pass
-
-    def add_word_to_session(self, session_id: str, word_id: str):
-        """Backward compatible: link word to session."""
-        session_int_id = int(session_id.split("_")[1]) if session_id.startswith("session_") else int(session_id)
-        word_int_id = int(word_id)
-        cursor = self._get_cursor()
-        cursor.execute("UPDATE nodes SET session_id = ? WHERE id = ?", (session_int_id, word_int_id))
-        self._get_connection().commit()
-
-    def get_session_words(self, session_id: str) -> List[Dict]:
-        """Backward compatible: get words in session."""
-        session_int_id = int(session_id.split("_")[1]) if session_id.startswith("session_") else int(session_id)
+    def get_session_words(self, session_id: int) -> List[Dict]:
+        """Get all words in a session."""
         cursor = self._get_cursor()
         cursor.execute("""
-            SELECT id, content as word, translation, created_at
-            FROM nodes
-            WHERE session_id = ? AND type = 'word'
+            SELECT * FROM nodes
+            WHERE session_id = ? AND node_type = 'word'
             ORDER BY created_at ASC
-        """, (session_int_id,))
+        """, (session_id,))
         return [dict(row) for row in cursor.fetchall()]
 
     def get_all_sessions(self, limit: int = 20) -> List[Dict]:
-        """Backward compatible: get all sessions."""
+        """Get all sessions."""
         cursor = self._get_cursor()
         cursor.execute("""
-            SELECT id, title, created_at
-            FROM nodes
-            WHERE type = 'session'
-            ORDER BY created_at DESC
-            LIMIT ?
+            SELECT * FROM nodes WHERE node_type = 'session'
+            ORDER BY created_at DESC LIMIT ?
         """, (limit,))
         sessions = []
         for row in cursor.fetchall():
+            session = dict(row)
             cursor2 = self._get_cursor()
-            cursor2.execute("SELECT COUNT(*) FROM nodes WHERE session_id = ? AND type = 'word'", (row[0],))
-            word_count = cursor2.fetchone()[0]
-            sessions.append({
-                "session_id": f"session_{row[0]}",
-                "session_type": row[1].split(":")[0] if row[1] else "General",
-                "source_name": row[1].split(":")[1] if row[1] and ":" in row[1] else None,
-                "start_time": row[2],
-                "end_time": 0,
-                "word_count": word_count
-            })
+            cursor2.execute("SELECT COUNT(*) FROM nodes WHERE session_id = ? AND node_type = 'word'", (session['id'],))
+            session['word_count'] = cursor2.fetchone()[0]
+            sessions.append(session)
         return sessions
 
-    # ===== CHAIN METHODS (for ChainViewer) =====
-
-    def get_content_chain(self, node_id: int) -> List[Dict]:
-        """Get full chain from root to node (ancestors + current)."""
-        cursor = self._get_cursor()
-        cursor.execute("""
-            WITH RECURSIVE chain AS (
-                SELECT * FROM nodes WHERE id = ?
-                UNION ALL
-                SELECT n.* FROM nodes n JOIN chain c ON n.id = c.parent_id
-            )
-            SELECT * FROM chain ORDER BY created_at ASC
-        """, (node_id,))
-        return [dict(row) for row in cursor.fetchall()]
-
-    def get_content_node(self, node_id: int) -> Optional[Dict]:
-        """Alias for get_node."""
-        return self.get_node(node_id)
-
-    def get_node_children(self, node_id: int, edge_type: str = None) -> List[Dict]:
-        """Get children of a node."""
-        cursor = self._get_cursor()
-        if edge_type:
-            cursor.execute("""
-                SELECT id, type as node_type, content, title, created_at
-                FROM nodes WHERE parent_id = ? AND type = ?
-                ORDER BY created_at ASC
-            """, (node_id, edge_type))
-        else:
-            cursor.execute("""
-                SELECT id, type as node_type, content, title, created_at
-                FROM nodes WHERE parent_id = ?
-                ORDER BY created_at ASC
-            """, (node_id,))
-        return [dict(row) for row in cursor.fetchall()]
-
-    def get_node_parent(self, node_id: int) -> Optional[Dict]:
-        """Get parent of a node."""
-        node = self.get_node(node_id)
-        if not node or not node.get('parent_id'):
-            return None
-        return self.get_node(node['parent_id'])
-
-    def get_subtree(self, root_node_id: int, max_depth: int = 10) -> List[Dict]:
-        """Get entire subtree."""
-        cursor = self._get_cursor()
-        cursor.execute("""
-            WITH RECURSIVE subtree AS (
-                SELECT id, type as node_type, content, title, parent_id, created_at, 0 as depth
-                FROM nodes WHERE id = ?
-                UNION ALL
-                SELECT n.id, n.type, n.content, n.title, n.parent_id, n.created_at, depth + 1
-                FROM nodes n
-                JOIN subtree s ON n.parent_id = s.id
-                WHERE depth + 1 <= ?
-            )
-            SELECT * FROM subtree ORDER BY depth, created_at
-        """, (root_node_id, max_depth))
-        return [dict(row) for row in cursor.fetchall()]
+    # ========== CONTENT NODE METHODS ==========
 
     def create_content_node(self, node_type: str, content: str, title: str = None,
-                            parent_node_id: int = None, session_id: str = None,
-                            metadata: Dict = None, source_text_id: str = None) -> int:
-        """Create content node (for chain compatibility)."""
-        session_int_id = int(session_id.split("_")[1]) if session_id and session_id.startswith("session_") else session_id
-        return self.create_node(node_type, content=content, title=title,
-                                parent_id=parent_node_id, session_id=session_int_id,
-                                tags=list(metadata.keys()) if metadata else None)
+                            parent_id: int = None, session_id: int = None,
+                            metadata: Dict = None) -> int:
+        """Create a content node (query, response, raw_text, etc.)."""
+        return self.create_node(
+            node_type=node_type,
+            content=content,
+            title=title or content[:50],
+            parent_id=parent_id,
+            session_id=session_id,
+            metadata=metadata
+        )
 
-    def get_last_content_node_id(self) -> Optional[int]:
-        """Get most recent node ID."""
-        cursor = self._get_cursor()
-        cursor.execute("SELECT id FROM nodes ORDER BY created_at DESC LIMIT 1")
-        row = cursor.fetchone()
-        return row[0] if row else None
+    def record_word_occurrence(self, word: str, content_node_id: int):
+        """Record that a word appeared in content (creates reference)."""
+        word_node = self.get_word(word)
+        if word_node:
+            # Link word to content as parent reference
+            self.update_node(word_node['id'], parent_id=content_node_id)
 
-    def find_connected_words(self, word: str, max_hops: int = 2) -> List[Dict]:
-        """Find words connected through shared parents."""
+    def find_related_words(self, word: str, max_hops: int = 2) -> List[Dict]:
+        """Find words that appear in same contexts."""
         cursor = self._get_cursor()
-        # Find nodes containing this word
+        # Find content nodes containing this word
         cursor.execute("""
             SELECT DISTINCT parent_id
             FROM nodes
-            WHERE content LIKE ? AND type != 'word'
+            WHERE content LIKE ? AND node_type != 'word'
             LIMIT 10
         """, (f"%{word}%",))
-        parent_ids = [row[0] for row in cursor.fetchall() if row[0]]
+        parent_ids = [row['parent_id'] for row in cursor.fetchall() if row['parent_id']]
 
         if not parent_ids:
             return []
@@ -442,118 +351,18 @@ class VocabDatabase:
         # Find other words under same parents
         placeholders = ",".join(["?"] * len(parent_ids))
         cursor.execute(f"""
-            SELECT DISTINCT n.content as word, COUNT(*) as strength
+            SELECT DISTINCT n.content as word, COUNT(*) as frequency
             FROM nodes n
             WHERE n.parent_id IN ({placeholders})
-            AND n.type = 'word'
+            AND n.node_type = 'word'
             AND n.content != ?
             GROUP BY n.content
-            ORDER BY strength DESC
+            ORDER BY frequency DESC
             LIMIT 10
         """, parent_ids + [word])
-        return [{"word": row[0], "strength": row[1]} for row in cursor.fetchall()]
-
-    def find_word_occurrences(self, word: str) -> List[Dict]:
-        """Find where a word appears."""
-        cursor = self._get_cursor()
-        cursor.execute("""
-            SELECT id, type as node_type, title, created_at
-            FROM nodes
-            WHERE content LIKE ? AND type != 'word'
-            LIMIT 20
-        """, (f"%{word}%",))
         return [dict(row) for row in cursor.fetchall()]
 
-    def record_word_occurrence(self, word_id: str, content_node_id: int,
-                                position_start: int = 0, position_end: int = None,
-                                context_before: str = "", context_after: str = ""):
-        """Record word occurrence (simplified - just create a reference)."""
-        # In minimal schema, we just ensure the word is linked to the content
-        word_int_id = int(word_id)
-        cursor = self._get_cursor()
-        # Check if already linked
-        cursor.execute("""
-            SELECT id FROM nodes WHERE id = ? AND parent_id = ?
-        """, (word_int_id, content_node_id))
-        if not cursor.fetchone():
-            cursor.execute("""
-                UPDATE nodes SET parent_id = ? WHERE id = ?
-            """, (content_node_id, word_int_id))
-            self._get_connection().commit()
-
-    # ===== SENTENCE ANALYSIS METHODS (backward compatible stubs) =====
-
-    def create_sentence_analysis(self, content_id: str, title: str, original_text: str,
-                                   total_sentences: int, estimated_level: str) -> int:
-        """Stub for compatibility."""
-        node_id = self.create_node('analysis', content=original_text[:500], title=title,
-                                   tags=['sentence_analysis'])
-        return node_id
-
-    def save_analyzed_sentence(self, analysis_id: int, sentence_index: int, original: str,
-                                translation: str, why_matters: str, remember_hook: str,
-                                simplified_paraphrase: str = "", difficulty: int = 3) -> int:
-        """Stub for compatibility."""
-        node_id = self.create_node('sentence', content=original, translation=translation,
-                                   parent_id=analysis_id, title=f"Sentence {sentence_index}",
-                                   tags=[f"difficulty:{difficulty}"])
-        return node_id
-
-    def save_sentence_keyword(self, sentence_id: int, word: str, pinyin: str,
-                               insight: str, importance: float = 0.5):
-        """Stub for compatibility."""
-        self.create_node('keyword', content=word, title=word,
-                         parent_id=sentence_id, translation=insight)
-
-    def get_sentences_by_analysis(self, analysis_id: int) -> List[Dict]:
-        """Stub for compatibility."""
-        cursor = self._get_cursor()
-        cursor.execute("""
-            SELECT id, content as original, translation, created_at
-            FROM nodes
-            WHERE parent_id = ? AND type = 'sentence'
-            ORDER BY created_at
-        """, (analysis_id,))
-        return [dict(row) for row in cursor.fetchall()]
-
-    def get_all_sentence_analyses(self, limit: int = 20) -> List[Dict]:
-        """Stub for compatibility."""
-        cursor = self._get_cursor()
-        cursor.execute("""
-            SELECT id, title, created_at
-            FROM nodes
-            WHERE type = 'analysis'
-            ORDER BY created_at DESC
-            LIMIT ?
-        """, (limit,))
-        return [{"id": row[0], "title": row[1], "created_at": row[2]} for row in cursor.fetchall()]
-
-    def delete_sentence_analysis(self, analysis_id: int):
-        """Stub for compatibility."""
-        self.delete_node(analysis_id)
-
-    def toggle_sentence_mastered(self, sentence_id: int, mastered: bool):
-        """Stub for compatibility."""
-        self.update_node(sentence_id, tags=['mastered'] if mastered else [])
-
-    # ===== NOTE METHODS =====
-
-    def add_sentence_note(self, sentence_id: int, note_text: str, priority: int,
-                           tags: List[str], is_pinned: bool) -> int:
-        """Add note to a sentence/node."""
-        return self.create_node('note', content=note_text, parent_id=sentence_id,
-                                priority=priority, tags=tags)
-
-    def update_sentence_note(self, note_id: int, note_text: str, priority: int,
-                              tags: List[str], is_pinned: bool):
-        """Update a note."""
-        self.update_node(note_id, content=note_text, priority=priority, tags=tags)
-
-    def delete_sentence_note(self, note_id: int):
-        """Delete a note."""
-        self.delete_node(note_id)
-
-    # ===== UTILITIES =====
+    # ========== UTILITIES ==========
 
     def close(self):
         if hasattr(self._local, 'conn') and self._local.conn:

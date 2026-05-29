@@ -1,4 +1,4 @@
-#lib/windows.py
+# lib/windows.py
 import tkinter as tk
 import tkinter.font as tkfont
 import tkinter.messagebox as tkmb
@@ -8,27 +8,28 @@ import threading
 from PIL import Image, ImageTk
 import random
 from datetime import datetime
-from lib.sentence_explorer import SentenceExplorerFrame
 from lib.debug_utils import DebugLogger
 import time
+from lib.async_utils import run_async, stream_to_widgets, set_widget_text, clear_widget
+from lib.sentence_explorer import SentenceExplorerFrame
 
-MODES=["Lookup Only","Sparkle Notes","Immersion Mode", "Word Blossom", "Sentence Whisper"]
+MODES = ["Lookup Only", "Sparkle Notes", "Immersion Mode", "Word Blossom", "Sentence Whisper"]
 
 current_folder = os.path.dirname(os.path.abspath(__file__))
 repo_folder = os.path.dirname(current_folder)
 os.chdir(repo_folder)
+
 try:
     from lib.localai import OllamaClient
 except ImportError as e:
     from localai import OllamaClient
     print(f"Error importing OllamaClient: {e}")
+
 try:
     from lib.ccedict import lookup_cedict, extract_chinese_word_at_position, is_chinese_char
 except ImportError:
     lookup_cedict = extract_chinese_word_at_position = is_chinese_char = None
 
-# Import unified async utilities
-from lib.async_utils import run_async, stream_to_widgets, set_widget_text, clear_widget
 
 # ======================
 # Learning Context - Single source of truth for chain tracking
@@ -50,68 +51,55 @@ class LearningContext:
             node_type=node_type,
             content=content,
             title=title,
-            parent_node_id=self.active_node_id,
+            parent_id=self.active_node_id,
             session_id=self.active_session_id,
             metadata=metadata
         )
         self.active_node_id = node_id
         return node_id
 
+
 # ======================
 # Service Layer (DB Operations Decoupled from UI)
 # ======================
 
 class PopupDataService:
-    """Encapsulates all DB operations for popups."""
+    """Encapsulates all DB operations for popups using simplified API."""
     def __init__(self, db=None):
         self.db = db
     
     def save_word(self, word, translation, session_id=None):
         if not self.db:
             return None
-        
-        word_id = self.db.add_word(word, translation, example="")
-        if session_id:
-            self.db.add_word_to_session(session_id, word_id)
-        return word_id
-    
-    def save_explanation_as_content(self, title, content, session_id=None, parent_node_id=None, metadata=None):
-        if not self.db:
-            return None
-        
-        return self.db.create_content_node(
-            node_type='response',
-            content=content,
-            title=title,
-            parent_node_id=parent_node_id,
-            session_id=session_id,
-            metadata=metadata or {"source": "popup_explanation"}
-        )
-    
-    def record_word_occurrence(self, word, content_node_id, position_start=0, position_end=None):
-        if not self.db or not content_node_id:
-            return
-        
-        word_id = self.db.get_word_id(word)
-        if word_id:
-            self.db.record_word_occurrence(
-                word_id=word_id,
-                content_node_id=content_node_id,
-                position_start=position_start,
-                position_end=position_end or len(word)
-            )
-    
-    def get_active_session_id(self):
-        """Get current active session ID."""
-        if not self.db:
-            return None
-        active = self.db.get_active_session()
-        return active['session_id'] if active else None
+        return self.db.create_word(word, translation, session_id=session_id)
     
     def word_exists(self, word):
         if not self.db:
             return False
-        return self.db.get_word_id(word) is not None
+        return self.db.get_word(word) is not None
+    
+    def get_active_session_id(self):
+        if not self.db:
+            return None
+        active = self.db.get_active_session()
+        return active['id'] if active else None
+    
+    def save_explanation_as_content(self, title, content, session_id=None, parent_node_id=None, metadata=None):
+        if not self.db:
+            return None
+        return self.db.create_content_node(
+            node_type='response',
+            content=content,
+            title=title,
+            parent_id=parent_node_id,
+            session_id=session_id,
+            metadata=metadata
+        )
+    
+    def record_word_occurrence(self, word, content_node_id):
+        if not self.db:
+            return
+        self.db.record_word_occurrence(word, content_node_id)
 
 
 class TranslationDialog:
@@ -228,6 +216,7 @@ class PopupSaveManager:
             self.data_service.record_word_occurrence(word, parent_node_id)
         
         return word_id
+
 
 # ======================
 # Reusable Components
@@ -381,7 +370,7 @@ class LookupPanel(ctk.CTkFrame):
                     metadata={"source": "lookup_panel", "mode": mode_var.get()}
                 )
                 if new_node_id:
-                    service.record_word_occurrence(word, new_node_id, 0, len(word))
+                    service.record_word_occurrence(word, new_node_id)
                     print(f"✓ Created lookup node {new_node_id} with parent {parent_node_id}")
                     if self.context:
                         self.context.active_node_id = new_node_id
@@ -418,14 +407,14 @@ class ThinkBox(ctk.CTkFrame):
         self.text_box.configure(state="disabled")
         self.text_box.pack(fill="both", expand=True)
 
-    def append(self, text):
+    def append_think(self, text):
         """Append text (call from UI thread only)."""
         self.text_box.configure(state="normal")
         self.text_box.insert("end", text)
         self.text_box.configure(state="disabled")
         self.text_box.see("end")
 
-    def clear(self):
+    def clear_think(self):
         """Clear text (call from UI thread only)."""
         self.text_box.configure(state="normal")
         self.text_box.delete("1.0", "end")
@@ -442,11 +431,11 @@ class ThinkBox(ctk.CTkFrame):
 
 
 class ControlPanel:
-    def __init__(self, app_callback=None, ai_client:OllamaClient=OllamaClient(), db=None, data_service=None, context=None): 
+    def __init__(self, app_callback=None, ai_client=None, db=None, data_service=None, context=None): 
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme(os.path.join(current_folder, "theme.json"))
 
-        self.ai = ai_client
+        self.ai = ai_client or OllamaClient()
         self.db = db
         self.data_service = data_service or PopupDataService(db)
         self.context = context or LearningContext(db)
@@ -476,7 +465,6 @@ class ControlPanel:
         self.top_line_label = ctk.CTkLabel(self.top_line_frame, text="AI Unknown, 📋 (No clipboard text)", text_color="gray", anchor="w", justify="left", cursor="hand2")
         self.top_line_label.pack(side="left", fill="x", expand=True)
         self.top_line_label.bind("<Button-1>", self._on_clipboard_click)
-        self.top_line_font = tkfont.Font(font=self.top_line_label.cget("font"))
 
         # Session context
         self.session_context = ""
@@ -547,14 +535,7 @@ class ControlPanel:
             popup_message("No Database", "Database not available", parent=self.root)
             return
         
-        cursor = self.db._get_cursor()
-        cursor.execute("""
-            SELECT id, node_type, title, created_at 
-            FROM content_nodes 
-            ORDER BY created_at DESC 
-            LIMIT 20
-        """)
-        nodes = cursor.fetchall()
+        nodes = self.db.get_recent_nodes(limit=20)
         
         if not nodes:
             popup_message("No Nodes", "No content nodes found", parent=self.root)
@@ -571,17 +552,16 @@ class ControlPanel:
         list_frame.pack(fill="both", expand=True, padx=10, pady=10)
         
         for node in nodes:
-            node_id, node_type, title, created_at = node
-            date_str = datetime.fromtimestamp(created_at).strftime('%H:%M:%S')
+            date_str = datetime.fromtimestamp(node['created_at']).strftime('%H:%M:%S')
             
             item_frame = ctk.CTkFrame(list_frame)
             item_frame.pack(fill="x", pady=2)
             
             ctk.CTkLabel(item_frame, text=f"[{date_str}]", width=80, text_color="gray").pack(side="left", padx=5)
-            ctk.CTkLabel(item_frame, text=f"{node_type[:8]}", width=100, font=ctk.CTkFont(weight="bold")).pack(side="left", padx=5)
-            ctk.CTkLabel(item_frame, text=title[:40] if title else "-", width=250).pack(side="left", padx=5)
+            ctk.CTkLabel(item_frame, text=f"{node['node_type'][:8]}", width=100, font=ctk.CTkFont(weight="bold")).pack(side="left", padx=5)
+            ctk.CTkLabel(item_frame, text=node.get('title', '-')[:40], width=250).pack(side="left", padx=5)
             
-            def view(nid=node_id):
+            def view(nid=node['id']):
                 from lib.chain_viewer import ChainViewer
                 viewer = ChainViewer(selector, self.db, nid, f"Content Chain - Node {nid}")
                 viewer.focus()
@@ -636,12 +616,12 @@ class ControlPanel:
             node_type='response',
             content="Test child response",
             title="Test Child",
-            parent_node_id=root_id,
+            parent_id=root_id,
             session_id=self.data_service.get_active_session_id()
         )
         self._add_debug_log(f"✓ Created child node: {child_id}")
         
-        chain = self.db.get_content_chain(child_id)
+        chain = self.db.get_chain(child_id)
         self._add_debug_log(f"Chain length: {len(chain)}")
         for i, node in enumerate(chain):
             self._add_debug_log(f"  [{i}] id={node['id']}, type={node['node_type']}")
@@ -653,12 +633,7 @@ class ControlPanel:
             self._add_debug_log("❌ No database available to show chain")
             return
         
-        last_node_id = None
-        try:
-            last_node_id = self.db.get_last_content_node_id()
-        except Exception as e:
-            self._add_debug_log(f"❌ Error fetching last node: {e}")
-            return
+        last_node_id = self.db.get_last_node_id()
         
         if not last_node_id:
             self._add_debug_log("⚠️ No content nodes found in database")
@@ -666,10 +641,10 @@ class ControlPanel:
         
         self._add_debug_log(f"🔍 Fetching chain for last node id: {last_node_id}")
         try:
-            chain = self.db.get_content_chain(last_node_id)
+            chain = self.db.get_chain(last_node_id)
             self._add_debug_log(f"Chain length: {len(chain)}")
             for i, node in enumerate(chain):
-                self._add_debug_log(f"  [{i}] id={node['id']}, type={node['node_type']}, title={node['title']}")
+                self._add_debug_log(f"  [{i}] id={node['id']}, type={node['node_type']}, title={node.get('title')}")
         except Exception as e:
             self._add_debug_log(f"❌ Error fetching chain: {e}")
     
@@ -826,10 +801,10 @@ class ControlPanel:
             popup_message("No Active Session", "No active session to end.", parent=self.root)
             return
         
-        if popup_message("End Session", f"End session '{active['session_type']}' with {active['word_count']} words?", is_yes_no=True, parent=self.root):
-            self.db.end_session(active['session_id'])
+        if popup_message("End Session", f"End session with {active.get('word_count', 0)} words?", is_yes_no=True, parent=self.root):
+            # Sessions don't need explicit end in simplified API
             self._refresh_session_status()
-            popup_message("Session Ended", f"Session ended. {active['word_count']} words recorded.", parent=self.root)
+            popup_message("Session Ended", f"Session ended.", parent=self.root)
 
     def _refresh_session_status(self):
         """Update session status display."""
@@ -840,11 +815,12 @@ class ControlPanel:
         active = self.db.get_active_session()
         if active:
             self.session_status_label.configure(
-                text=f"📚 {active['session_type']}: {active['word_count']} words", 
+                text=f"📚 {active.get('title', 'Session')[:30]}: {active.get('word_count', 0)} words", 
                 text_color="green"
             )
         else:
             self.session_status_label.configure(text="📚 No session", text_color="gray")
+    
     def _show_session_list(self):
         if self.db is None:
             popup_message("Database Missing", "Session management requires a database connection.", parent=self.root)
@@ -869,23 +845,22 @@ class ControlPanel:
             item_frame = ctk.CTkFrame(list_frame)
             item_frame.pack(fill="x", pady=3)
             
-            date_str = datetime.fromtimestamp(s['start_time']).strftime('%m-%d %H:%M')
-            type_icon = {"Manhua": "📖", "Song": "🎵", "News": "📰", "Conversation": "💬"}.get(s['session_type'], "📚")
-            status = "🟢" if s['end_time'] == 0 else "🔴"
+            date_str = datetime.fromtimestamp(s['created_at']).strftime('%m-%d %H:%M')
+            title = s.get('title', 'Session')
+            status = "🟢"
             
-            ctk.CTkLabel(item_frame, text=f"{status} {type_icon} {s['session_type']}", 
-                        font=ctk.CTkFont(weight="bold"), width=120).pack(side="left", padx=5)
-            ctk.CTkLabel(item_frame, text=s['source_name'][:30] if s['source_name'] else "Untitled", 
-                        width=150).pack(side="left", padx=5)
-            ctk.CTkLabel(item_frame, text=f"{s['word_count']} words", width=80).pack(side="left", padx=5)
+            ctk.CTkLabel(item_frame, text=f"{status} 📚", 
+                        font=ctk.CTkFont(weight="bold"), width=40).pack(side="left", padx=5)
+            ctk.CTkLabel(item_frame, text=title[:40], width=200).pack(side="left", padx=5)
+            ctk.CTkLabel(item_frame, text=f"{s.get('word_count', 0)} words", width=80).pack(side="left", padx=5)
             ctk.CTkLabel(item_frame, text=date_str, width=100, text_color="gray").pack(side="left", padx=5)
             
-            def view_words(sid=s['session_id']):
+            def view_words(sid=s['id']):
                 self._view_session_words(sid)
                 popup.destroy()
             ctk.CTkButton(item_frame, text="View Words", width=80, command=view_words).pack(side="right", padx=5)
 
-    def _view_session_words(self, session_id: str):
+    def _view_session_words(self, session_id: int):
         words = self.db.get_session_words(session_id)
         
         popup = ctk.CTkToplevel(self.root)
@@ -893,7 +868,7 @@ class ControlPanel:
         popup.title(f"Session Words")
         popup.attributes("-topmost", True)
         
-        ctk.CTkLabel(popup, text=f"📚 Session: {session_id}", font=ctk.CTkFont(size=14, weight="bold")).pack(pady=10)
+        ctk.CTkLabel(popup, text=f"📚 Session Details", font=ctk.CTkFont(size=14, weight="bold")).pack(pady=10)
         
         if words:
             list_frame = ctk.CTkScrollableFrame(popup)
@@ -902,8 +877,8 @@ class ControlPanel:
             for w in words:
                 word_frame = ctk.CTkFrame(list_frame)
                 word_frame.pack(fill="x", pady=2)
-                ctk.CTkLabel(word_frame, text=w['word'], font=ctk.CTkFont(weight="bold"), width=100).pack(side="left", padx=5)
-                ctk.CTkLabel(word_frame, text=w['translation'][:40], width=250).pack(side="left", padx=5)
+                ctk.CTkLabel(word_frame, text=w['content'], font=ctk.CTkFont(weight="bold"), width=100).pack(side="left", padx=5)
+                ctk.CTkLabel(word_frame, text=w.get('translation', '')[:40], width=250).pack(side="left", padx=5)
         else:
             ctk.CTkLabel(popup, text="No words in this session yet.").pack(pady=20)
     
@@ -912,7 +887,7 @@ class ControlPanel:
         active_session = self.db.get_active_session() if self.db else None
         return {
             "db": self.db,
-            "session_id": active_session['session_id'] if active_session else None,
+            "session_id": active_session['id'] if active_session else None,
             "parent_node_id": self.context.active_node_id if self.context else None
         }
 
@@ -1083,7 +1058,7 @@ class Long_message_popup:
             print(f"📝 Created query node: {query_node_id} for text: {text}")
             
             if query_node_id:
-                self.data_service.record_word_occurrence(text, query_node_id, 0, len(text))
+                self.data_service.record_word_occurrence(text, query_node_id)
         
         try:
             explanation = self.get_explanation(text)
@@ -1094,7 +1069,6 @@ class Long_message_popup:
             if original_mode and self.control_panel:
                 self.control_panel.response_mode = original_mode
 
-    
     def _show_explanation_popup(self, text, explanation_generator, context=None):
         use_context = context or self.context
         
@@ -1114,6 +1088,12 @@ class Long_message_popup:
         
         response_popup.start_streaming(explanation_generator, text)
         response_popup.show()
+
+    def get_explanation(self, text):
+        """Placeholder - should be overridden by integrated app."""
+        def generator():
+            yield f"Explanation for: {text}"
+        return generator
 
     def start_streaming(self, generator, word_text):
         """Start streaming using unified async function."""
@@ -1158,7 +1138,7 @@ class Long_message_popup:
             self.store_as_content_node()
         
         if self.context and self.context.active_node_id and self.data_service and self.data_service.db:
-            chain = self.data_service.db.get_content_chain(self.context.active_node_id)
+            chain = self.data_service.db.get_chain(self.context.active_node_id)
             popup_message("Debug", f"Node {self.context.active_node_id} has chain length {len(chain)}", parent=self.long_popup)
             
     def add_button(self, text, command):
@@ -1254,9 +1234,9 @@ class ReviewFrame(ctk.CTkFrame):
     def _update_display(self):
         word = self.reviewer.get_current_word()
         if word:
-            self.word_label.configure(text=word[1])
-            self.trans_label.configure(text=word[2])
-            self.example_label.configure(text=f'"{word[3]}"' if word[3] else "")
+            self.word_label.configure(text=word.get('content', ''))
+            self.trans_label.configure(text=word.get('translation', ''))
+            self.example_label.configure(text=f'"{word.get("example_sentence", "")}"' if word.get("example_sentence") else "")
             self.progress_label.configure(text=self.reviewer.get_progress())
             self.prev_btn.configure(state="normal" if self.reviewer.current_index > 0 else "disabled")
             self.next_btn.configure(state="normal" if self.reviewer.current_index < len(self.reviewer.words) - 1 else "disabled")
@@ -1376,7 +1356,7 @@ class HomeFrame(ctk.CTkFrame):
         set_widget_text(self.insight_text, "Generating challenge...")
         clear_widget(self.think_challenge.text_box)
         
-        word_list = ", ".join([w[1] for w in self.last_words]) if self.last_words else ""
+        word_list = ", ".join([w.get('content', '') for w in self.last_words]) if self.last_words else ""
         if not word_list:
             set_widget_text(self.insight_text, "No words in database yet. Add some words first!")
             self.is_generating = False
@@ -1413,7 +1393,7 @@ class HomeFrame(ctk.CTkFrame):
         set_widget_text(self.summary_text, "Generating summary...")
         clear_widget(self.think_summary.text_box)
         
-        word_list = ", ".join([w[1] for w in self.last_words])
+        word_list = ", ".join([w.get('content', '') for w in self.last_words])
         
         def generator():
             return self.ai.generate_response(
@@ -1486,9 +1466,10 @@ class App(ctk.CTk):
             frame.grid_forget()
         self.frames[page_name].grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
 
+
 if __name__ == "__main__":
     popup_message("Test Message", "This is a test message to verify the popup_message function is working correctly.")
     panel = ControlPanel()
-    longpop = Long_message_popup("Test Long Popup", "This is a test of the long message popup. It should display this text and an image if enabled.", master=panel, display_image=True)
+    longpop = Long_message_popup("Test Long Popup", "This is a test of the long message popup.", master=panel, display_image=True)
     longpop.show()
     panel.show()

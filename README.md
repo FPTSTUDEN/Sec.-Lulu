@@ -62,9 +62,10 @@ Please refer to the [GUIDE.md](./GUIDE.md) file
 - [x] **Click - popup/replace with Eng word**
 - [ ] Refactor: Remove
   - [ ] Popup Services
-  - [ ] No saving repeated nodes
+  - [ ] No saving repeated branches
 - [x] Word & sentence graph
-  - [ ] Building connections
+  - [ ] Building (simplify) connections
+  - [ ] **Unsaved** session
   - [ ] AI Recommendation engine
 - [ ] **User control on DB content** (editable table, query)
 - [ ] auto picker for modes
