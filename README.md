@@ -60,9 +60,14 @@ Please refer to the [GUIDE.md](./GUIDE.md) file
 - [ ] ~~No pre-load model~~
 - [ ] Handle sentences
 - [x] **Click - popup/replace with Eng word**
+- [ ] Refactor: Remove
+  - [ ] Popup Services
+  - [ ] No saving repeated branches
 - [x] Word & sentence graph
-  - [ ] Building connections
+  - [ ] Building (simplify) connections
+  - [ ] **Unsaved** session
   - [ ] AI Recommendation engine
+- [ ] **User control on DB content** (editable table, query)
 - [ ] auto picker for modes
 - [ ] **Chinese mode + TTS**
 - [ ] MEMORY solution for AI with ADHD & dementia

@@ -1,15 +1,14 @@
 """
 Sentence Explorer - Break down Chinese text sentence by sentence.
-Parses AI response into: Keywords, Translation, Simplified Paraphrase, Why Matters, Remember Hook
+Uses simplified node-based database API.
 """
 
 import customtkinter as ctk
 import threading
 import re
-import uuid
-import time
 from datetime import datetime
 from typing import List, Dict, Optional
+import uuid
 
 import sys
 import os
@@ -18,6 +17,7 @@ from lib.db import VocabDatabase
 
 
 class SentenceExplorerFrame(ctk.CTkFrame):
+    """Frame for analyzing Chinese text sentence by sentence."""
     
     def __init__(self, master, ai_client, db: VocabDatabase, 
                  word_index=None, char_def_index=None, **kwargs):
@@ -61,7 +61,7 @@ class SentenceExplorerFrame(ctk.CTkFrame):
         self.title_entry = ctk.CTkEntry(option_frame, width=200, placeholder_text="Optional")
         self.title_entry.pack(side="left", padx=5)
         
-        # ===== SESSION CONTROLS =====
+        # Session controls
         session_frame = ctk.CTkFrame(option_frame, fg_color="transparent")
         session_frame.pack(side="left", padx=10)
         
@@ -107,7 +107,6 @@ class SentenceExplorerFrame(ctk.CTkFrame):
         self.status_label = ctk.CTkLabel(self, text="", text_color="gray")
         self.status_label.grid(row=4, column=0, pady=5)
         
-        # Refresh session status
         self._refresh_session_status()
     
     def _create_new_session(self):
@@ -133,7 +132,8 @@ class SentenceExplorerFrame(ctk.CTkFrame):
         
         def create():
             source = source_entry.get().strip() or None
-            self.current_session_id = self.db.create_session(type_var.get(), source)
+            session_id = self.db.create_session(type_var.get(), source)
+            self.current_session_id = session_id
             self.session_var.set(type_var.get())
             self._refresh_session_status()
             popup.destroy()
@@ -149,41 +149,39 @@ class SentenceExplorerFrame(ctk.CTkFrame):
             win.popup_message("No Active Session", "No active session to end.", parent=self)
             return
         
-        if win.popup_message("End Session", f"End session '{active['session_type']}' with {active['word_count']} words?", is_yes_no=True, parent=self):
-            self.db.end_session(active['session_id'])
+        if win.popup_message("End Session", f"End session with {active.get('word_count', 0)} words?", is_yes_no=True, parent=self):
+            # Sessions don't need explicit end in simplified API
             self.current_session_id = None
             self._refresh_session_status()
-            win.popup_message("Session Ended", f"Session ended. {active['word_count']} words recorded.", parent=self)
+            win.popup_message("Session Ended", f"Session ended.", parent=self)
     
     def _refresh_session_status(self):
         """Update session status display."""
         active = self.db.get_active_session()
         if active:
-            self.current_session_id = active['session_id']
-            self.session_status_label.configure(text=f"📚 {active['session_type']}: {active['word_count']} words", 
+            self.current_session_id = active['id']
+            title = active.get('title', 'Session')
+            self.session_status_label.configure(text=f"📚 {title[:30]}: {active.get('word_count', 0)} words", 
                                                  text_color="green")
         else:
             self.current_session_id = None
             self.session_status_label.configure(text="No active session", text_color="gray")
     
-    def _get_or_create_session(self) -> str:
+    def _get_or_create_session(self) -> int:
         """Get active session or create new one based on user selection."""
         session_type = self.session_var.get()
         
         if session_type == "Auto":
             active = self.db.get_active_session()
             if active:
-                return active['session_id']
+                return active['id']
             else:
-                # Create default session
                 return self.db.create_session("General", "Auto-created")
         else:
-            # Check if there's an active session of this type
             active = self.db.get_active_session()
-            if active and active['session_type'] == session_type:
-                return active['session_id']
+            if active and active.get('title', '').startswith(session_type):
+                return active['id']
             else:
-                # Create new session of selected type
                 source = self.title_entry.get().strip() or session_type
                 return self.db.create_session(session_type, source)
     
@@ -193,7 +191,7 @@ class SentenceExplorerFrame(ctk.CTkFrame):
         return [s.strip() for s in raw_sentences if s.strip()]
     
     def _parse_ai_response(self, sentence: str, response: str, index: int) -> Dict:
-        """Parse AI's sentence whisper response into structured data."""
+        """Parse AI's sentence analysis response into structured data."""
         analysis = {
             'index': index,
             'original': sentence,
@@ -279,6 +277,16 @@ class SentenceExplorerFrame(ctk.CTkFrame):
             
             self._update_status_after(0, f"Found {len(sentences)} sentences. Analyzing...", "orange")
             
+            # Create analysis node
+            analysis_node_id = self.db.create_content_node(
+                node_type='analysis',
+                content=text[:500],
+                title=self.current_title,
+                session_id=self.current_session_id,
+                metadata={'total_sentences': len(sentences)}
+            )
+            self.current_analysis_id = analysis_node_id
+            
             for i, sentence in enumerate(sentences, 1):
                 self._update_status_after(0, f"Analyzing sentence {i}/{len(sentences)}...", "orange")
                 
@@ -309,11 +317,48 @@ class SentenceExplorerFrame(ctk.CTkFrame):
                         self._after_append_think(thinking_text)
                     else:
                         full_response += chunk
-                print(full_response)  # For debugging
                 
                 analysis = self._parse_ai_response(sentence, full_response, i)
                 all_analyses.append(analysis)
                 difficulty_sum += analysis.get('difficulty', 3)
+                
+                # Save sentence as node
+                sentence_content = f"{sentence}\n\nTranslation: {analysis.get('translation', '')}\nWhy it matters: {analysis.get('why_matters', '')}\nRemember: {analysis.get('remember_hook', '')}"
+                sentence_node_id = self.db.create_content_node(
+                    node_type='sentence',
+                    content=sentence_content,
+                    title=f"Sentence {i}",
+                    parent_id=analysis_node_id,
+                    session_id=self.current_session_id,
+                    metadata={
+                        'translation': analysis.get('translation', ''),
+                        'simplified_paraphrase': analysis.get('simplified_paraphrase', ''),
+                        'why_matters': analysis.get('why_matters', ''),
+                        'remember_hook': analysis.get('remember_hook', ''),
+                        'difficulty': analysis.get('difficulty', 3)
+                    }
+                )
+                
+                # Save keywords as word nodes
+                for kw in analysis.get('keywords', []):
+                    word_text = kw.get('word', '')
+                    if word_text:
+                        existing = self.db.get_word(word_text)
+                        if not existing:
+                            self.db.create_word(
+                                word_text,
+                                kw.get('insight', ''),
+                                parent_id=sentence_node_id
+                            )
+                        else:
+                            self.db.update_node(existing['id'], parent_id=sentence_node_id)
+                        
+                        # Add word to session
+                        if self.current_session_id:
+                            word_node = self.db.get_word(word_text)
+                            if word_node:
+                                self.db.update_node(word_node['id'], session_id=self.current_session_id)
+                
                 self._after_add_card(analysis, i)
             
             avg_difficulty = difficulty_sum / len(sentences) if sentences else 3
@@ -326,43 +371,9 @@ class SentenceExplorerFrame(ctk.CTkFrame):
             else:
                 level = "HSK5+"
             
-            content_id = str(uuid.uuid4())
-            analysis_id = self.db.create_sentence_analysis(
-                content_id=content_id,
-                title=self.current_title,
-                original_text=text,
-                total_sentences=len(sentences),
-                estimated_level=level
-            )
+            # Update analysis node with level
+            self.db.update_node(analysis_node_id, metadata={'estimated_level': level, 'total_sentences': len(sentences)})
             
-            for analysis in all_analyses:
-                sentence_id = self.db.save_analyzed_sentence(
-                    analysis_id=analysis_id,
-                    sentence_index=analysis['index'],
-                    original=analysis['original'],
-                    translation=analysis.get('translation', ''),
-                    why_matters=analysis.get('why_matters', ''),
-                    remember_hook=analysis.get('remember_hook', ''),
-                    simplified_paraphrase=analysis.get('simplified_paraphrase', ''),
-                    difficulty=analysis.get('difficulty', 3)
-                )
-                
-                for kw in analysis.get('keywords', []):
-                    self.db.save_sentence_keyword(
-                        sentence_id=sentence_id,
-                        word=kw.get('word', ''),
-                        pinyin=kw.get('pinyin', ''),
-                        insight=kw.get('insight', ''),
-                        importance=kw.get('importance', 0.5)
-                    )
-                    
-                    # Add word to session
-                    word_id = self.db.get_word_id(kw.get('word', ''))
-                    if word_id and self.current_session_id:
-                        self.db.add_word_to_session(self.current_session_id, word_id)
-            
-            self.current_content_id = content_id
-            self.current_analysis_id = analysis_id
             self._refresh_session_status()
             self._update_status_after(0, f"✅ Complete! {len(sentences)} sentences, {level} level", "green")
             self._after_enable_button()
@@ -393,23 +404,22 @@ class SentenceExplorerFrame(ctk.CTkFrame):
             item_frame = ctk.CTkFrame(list_frame)
             item_frame.pack(fill="x", pady=3)
             
-            date_str = datetime.fromtimestamp(s['start_time']).strftime('%m-%d %H:%M')
-            type_icon = {"Manhua": "📖", "Song": "🎵", "News": "📰", "Conversation": "💬"}.get(s['session_type'], "📚")
-            status = "🟢" if s['end_time'] == 0 else "🔴"
+            date_str = datetime.fromtimestamp(s['created_at']).strftime('%m-%d %H:%M')
+            title = s.get('title', 'Session')
+            status = "🟢"
             
-            ctk.CTkLabel(item_frame, text=f"{status} {type_icon} {s['session_type']}", 
-                         font=ctk.CTkFont(weight="bold"), width=120).pack(side="left", padx=5)
-            ctk.CTkLabel(item_frame, text=s['source_name'][:30] if s['source_name'] else "Untitled", 
-                         width=150).pack(side="left", padx=5)
-            ctk.CTkLabel(item_frame, text=f"{s['word_count']} words", width=80).pack(side="left", padx=5)
+            ctk.CTkLabel(item_frame, text=f"{status} 📚", 
+                         font=ctk.CTkFont(weight="bold"), width=40).pack(side="left", padx=5)
+            ctk.CTkLabel(item_frame, text=title[:40], width=200).pack(side="left", padx=5)
+            ctk.CTkLabel(item_frame, text=f"{s.get('word_count', 0)} words", width=80).pack(side="left", padx=5)
             ctk.CTkLabel(item_frame, text=date_str, width=100, text_color="gray").pack(side="left", padx=5)
             
-            def view(sid=s['session_id']):
+            def view(sid=s['id']):
                 self._view_session_details(sid)
                 popup.destroy()
             ctk.CTkButton(item_frame, text="View", width=60, command=view).pack(side="right", padx=5)
     
-    def _view_session_details(self, session_id: str):
+    def _view_session_details(self, session_id: int):
         """Show detailed view of a session with all words."""
         win = self._get_windows()
         words = self.db.get_session_words(session_id)
@@ -419,7 +429,7 @@ class SentenceExplorerFrame(ctk.CTkFrame):
         popup.title(f"Session Details")
         popup.attributes("-topmost", True)
         
-        ctk.CTkLabel(popup, text=f"📚 Session: {session_id}", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=10)
+        ctk.CTkLabel(popup, text=f"📚 Session Details", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=10)
         
         if words:
             list_frame = ctk.CTkScrollableFrame(popup)
@@ -428,19 +438,8 @@ class SentenceExplorerFrame(ctk.CTkFrame):
             for w in words:
                 word_frame = ctk.CTkFrame(list_frame)
                 word_frame.pack(fill="x", pady=2)
-                ctk.CTkLabel(word_frame, text=w['word'], font=ctk.CTkFont(weight="bold"), width=120).pack(side="left", padx=5)
-                ctk.CTkLabel(word_frame, text=w['translation'][:50], width=300).pack(side="left", padx=5)
-            
-            # Find related sessions
-            related = self.db.find_related_sessions(session_id)
-            if related:
-                ctk.CTkLabel(popup, text="🔗 Related Sessions (based on shared words):", 
-                             font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(10,0))
-                
-                for r in related:
-                    relate_frame = ctk.CTkFrame(popup, fg_color=("gray85", "gray25"))
-                    relate_frame.pack(fill="x", padx=20, pady=2)
-                    ctk.CTkLabel(relate_frame, text=f"{r['session_type']}: {r['session_id']} ({r['common_words']} shared words)").pack(side="left", padx=10)
+                ctk.CTkLabel(word_frame, text=w['content'], font=ctk.CTkFont(weight="bold"), width=120).pack(side="left", padx=5)
+                ctk.CTkLabel(word_frame, text=w.get('translation', '')[:50], width=300).pack(side="left", padx=5)
         else:
             ctk.CTkLabel(popup, text="No words in this session yet.").pack(pady=20)
     
@@ -460,21 +459,9 @@ class SentenceExplorerFrame(ctk.CTkFrame):
         ctk.CTkLabel(header, text=f"📖 {index}. {preview}", 
                      font=ctk.CTkFont(weight="bold"), anchor="w").pack(side="left", fill="x", expand=True)
         
-        has_high = any(n.get('priority', 2) == 1 for n in sentence_data.get('notes', []))
-        if has_high:
-            ctk.CTkLabel(header, text="🔴", font=ctk.CTkFont(size=14)).pack(side="right", padx=2)
-        
-        note_btn = ctk.CTkButton(header, text="📝", width=30, height=30, command=lambda d=sentence_data: self._show_note_editor(d))
-        note_btn.pack(side="right", padx=2)
-        
         expand_btn = ctk.CTkButton(header, text="▼", width=30, height=30, command=lambda c=card: self._toggle_card(c))
         expand_btn.pack(side="right", padx=2)
         card.expand_btn = expand_btn
-        
-        mastered_var = ctk.BooleanVar(value=sentence_data.get('mastered', False))
-        def on_mastered_change():
-            self.db.toggle_sentence_mastered(sentence_data['id'], mastered_var.get())
-        ctk.CTkCheckBox(header, text="Mastered", variable=mastered_var, command=on_mastered_change).pack(side="right", padx=10)
         
         # Expanded content frame
         card.expanded_frame = ctk.CTkFrame(card, fg_color="transparent")
@@ -518,18 +505,6 @@ class SentenceExplorerFrame(ctk.CTkFrame):
             ctk.CTkLabel(hook_frame, text="🔗 Remember it:", font=ctk.CTkFont(weight="bold")).pack(anchor="w")
             ctk.CTkLabel(hook_frame, text=sentence_data['remember_hook'], wraplength=500, justify="left",
                          text_color="orange").pack(anchor="w", padx=20)
-        
-        # Notes section
-        notes = sentence_data.get('notes', [])
-        if notes:
-            notes_frame = ctk.CTkFrame(card.expanded_frame, fg_color=("gray85", "gray25"), corner_radius=8)
-            notes_frame.pack(fill="x", pady=10)
-            ctk.CTkLabel(notes_frame, text="📌 Your Notes:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=10, pady=(5,0))
-            for note in sorted(notes, key=lambda n: (not n.get('is_pinned', False), n.get('priority', 2))):
-                note_color = "red" if note.get('priority') == 1 else ("orange" if note.get('priority') == 2 else "gray")
-                pin = "📌 " if note.get('is_pinned') else ""
-                ctk.CTkLabel(notes_frame, text=f"{pin}{note.get('note_text', '')[:100]}", 
-                             wraplength=450, justify="left", text_color=note_color).pack(anchor="w", padx=20, pady=2)
     
     def _toggle_card(self, card):
         card.expanded = not card.expanded
@@ -540,80 +515,9 @@ class SentenceExplorerFrame(ctk.CTkFrame):
             card.expanded_frame.pack_forget()
             card.expand_btn.configure(text="▼")
     
-    def _show_note_editor(self, sentence_data: Dict):
-        win = self._get_windows()
-        
-        popup = ctk.CTkToplevel(self)
-        popup.geometry("550x500")
-        popup.title(f"Notes for: {sentence_data['original'][:50]}...")
-        popup.attributes("-topmost", True)
-        
-        priority_frame = ctk.CTkFrame(popup, fg_color="transparent")
-        priority_frame.pack(fill="x", padx=20, pady=10)
-        ctk.CTkLabel(priority_frame, text="Priority:").pack(side="left", padx=5)
-        priority_var = ctk.StringVar(value="2")
-        for label, value, color in [("🔴 High", "1", "red"), ("🟡 Medium", "2", "orange"), ("🟢 Low", "3", "green")]:
-            ctk.CTkRadioButton(priority_frame, text=label, variable=priority_var, value=value).pack(side="left", padx=10)
-        
-        ctk.CTkLabel(popup, text="Note:").pack(anchor="w", padx=20)
-        note_text = ctk.CTkTextbox(popup, height=150, wrap="word", font=("Mengshen-Handwritten", 14))
-        note_text.pack(fill="both", expand=True, padx=20, pady=5)
-        
-        ctk.CTkLabel(popup, text="Tags (comma separated):").pack(anchor="w", padx=20)
-        tag_entry = ctk.CTkEntry(popup, placeholder_text="grammar, vocabulary, culture, question")
-        tag_entry.pack(fill="x", padx=20, pady=5)
-        
-        pin_var = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(popup, text="📌 Pin this note", variable=pin_var).pack(anchor="w", padx=20, pady=5)
-        
-        existing_note = sentence_data.get('notes', [None])[0] if sentence_data.get('notes') else None
-        note_id = None
-        if existing_note:
-            note_text.insert("1.0", existing_note.get('note_text', ''))
-            priority_var.set(str(existing_note.get('priority', 2)))
-            tag_entry.insert(0, ", ".join(existing_note.get('tags', [])))
-            pin_var.set(existing_note.get('is_pinned', False))
-            note_id = existing_note.get('id')
-        
-        btn_frame = ctk.CTkFrame(popup, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=20, pady=20)
-        
-        def save():
-            text = note_text.get("1.0", "end-1c").strip()
-            if not text:
-                win.popup_message("Empty Note", "Please enter some text.")
-                return
-            tags = [t.strip() for t in tag_entry.get().split(",") if t.strip()]
-            priority = int(priority_var.get())
-            is_pinned = pin_var.get()
-            if note_id:
-                self.db.update_sentence_note(note_id, text, priority, tags, is_pinned)
-            else:
-                self.db.add_sentence_note(sentence_data['id'], text, priority, tags, is_pinned)
-            popup.destroy()
-            self._refresh_current_display()
-        
-        ctk.CTkButton(btn_frame, text="Save", fg_color="green", command=save).pack(side="right", padx=5)
-        ctk.CTkButton(btn_frame, text="Cancel", command=popup.destroy, fg_color="gray").pack(side="right", padx=5)
-        
-        if note_id:
-            def delete():
-                if win.popup_message("Delete Note", "Delete this note?", is_yes_no=True):
-                    self.db.delete_sentence_note(note_id)
-                    popup.destroy()
-                    self._refresh_current_display()
-            ctk.CTkButton(btn_frame, text="Delete", fg_color="red", command=delete).pack(side="left", padx=5)
-    
-    def _refresh_current_display(self):
-        if self.current_analysis_id:
-            self._clear_results()
-            sentences = self.db.get_sentences_by_analysis(self.current_analysis_id)
-            for i, sent_data in enumerate(sentences, 1):
-                self._create_sentence_card(sent_data, i)
-    
     def _show_saved_analyses(self):
         win = self._get_windows()
-        analyses = self.db.get_all_sentence_analyses()
+        analyses = self.db.get_recent_nodes(limit=20, node_type='analysis')
         if not analyses:
             win.popup_message("No Saved Analyses", "No analyses found. Analyze some text first!")
             return
@@ -631,35 +535,68 @@ class SentenceExplorerFrame(ctk.CTkFrame):
             item_frame = ctk.CTkFrame(list_frame)
             item_frame.pack(fill="x", pady=3)
             date_str = datetime.fromtimestamp(a['created_at']).strftime('%Y-%m-%d')
-            title = a['title'][:40] if a['title'] else f"Analysis {a['id']}"
-            ctk.CTkLabel(item_frame, text=f"📖 {title}", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=10)
-            ctk.CTkLabel(item_frame, text=f"{a['total_sentences']} sentences • {a['estimated_level']} • {date_str}", text_color="gray").pack(side="left", padx=10)
+            title = a.get('title', f"Analysis {a['id']}")[:40]
             
-            def load(a_id=a['id'], content_id=a['content_id']):
-                self._load_analysis(a_id, content_id)
+            ctk.CTkLabel(item_frame, text=f"📖 {title}", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=10)
+            
+            def load(aid=a['id']):
+                self._load_analysis(aid)
                 popup.destroy()
             ctk.CTkButton(item_frame, text="Load", width=60, command=load).pack(side="right", padx=5)
             
-            def delete(a_id=a['id']):
+            def delete(aid=a['id']):
                 if win.popup_message("Delete", f"Delete '{title}'?", is_yes_no=True):
-                    self.db.delete_sentence_analysis(a_id)
+                    self.db.delete_node(aid)
                     popup.destroy()
                     self._show_saved_analyses()
             ctk.CTkButton(item_frame, text="🗑️", width=40, fg_color="red", command=delete).pack(side="right", padx=5)
     
-    def _load_analysis(self, analysis_id: int, content_id: str):
+    def _load_analysis(self, analysis_id: int):
         self._clear_results()
         self.current_analysis_id = analysis_id
-        self.current_content_id = content_id
-        analysis = self.db.get_sentence_analysis(content_id)
-        if analysis:
+        analysis_node = self.db.get_node(analysis_id)
+        
+        if analysis_node:
             self.title_entry.delete(0, "end")
-            self.title_entry.insert(0, analysis.get('title', ''))
+            self.title_entry.insert(0, analysis_node.get('title', ''))
             self.text_input.delete("1.0", "end")
-            self.text_input.insert("1.0", analysis.get('original_text', ''))
-        sentences = self.db.get_sentences_by_analysis(analysis_id)
-        for i, sent_data in enumerate(sentences, 1):
-            self._create_sentence_card(sent_data, i)
+            self.text_input.insert("1.0", analysis_node.get('content', ''))
+        
+        sentences = self.db.get_children(analysis_id, node_type='sentence')
+        for i, sent_node in enumerate(sentences, 1):
+            # Build sentence data from node
+            import ast
+            metadata = {}
+            if sent_node.get('metadata'):
+                try:
+                    metadata = ast.literal_eval(sent_node['metadata']) if isinstance(sent_node['metadata'], str) else sent_node['metadata']
+                except:
+                    metadata = {}
+            
+            sentence_data = {
+                'id': sent_node['id'],
+                'original': sent_node['content'].split('\n\n')[0] if sent_node['content'] else '',
+                'translation': metadata.get('translation', ''),
+                'simplified_paraphrase': metadata.get('simplified_paraphrase', ''),
+                'why_matters': metadata.get('why_matters', ''),
+                'remember_hook': metadata.get('remember_hook', ''),
+                'difficulty': metadata.get('difficulty', 3),
+                'keywords': [],
+                'notes': []
+            }
+            
+            # Get keywords (word nodes with this sentence as parent)
+            keywords = self.db.get_children(sent_node['id'], node_type='word')
+            for kw in keywords:
+                sentence_data['keywords'].append({
+                    'word': kw.get('content', ''),
+                    'pinyin': '',
+                    'insight': kw.get('translation', ''),
+                    'importance': 0.7
+                })
+            
+            self._create_sentence_card(sentence_data, i)
+        
         self.status_label.configure(text=f"✅ Loaded {len(sentences)} sentences", text_color="green")
     
     def _clear_results(self):
@@ -685,14 +622,12 @@ class SentenceExplorerFrame(ctk.CTkFrame):
         def add():
             card_data = {
                 'id': None,
-                'sentence_index': index,
                 'original': analysis.get('original', ''),
                 'translation': analysis.get('translation', ''),
                 'simplified_paraphrase': analysis.get('simplified_paraphrase', ''),
                 'why_matters': analysis.get('why_matters', ''),
                 'remember_hook': analysis.get('remember_hook', ''),
                 'difficulty': analysis.get('difficulty', 3),
-                'mastered': False,
                 'keywords': analysis.get('keywords', []),
                 'notes': []
             }
