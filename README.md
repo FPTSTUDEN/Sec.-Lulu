@@ -60,6 +60,9 @@ Please refer to the [GUIDE.md](./GUIDE.md) file
 - [ ] ~~No pre-load model~~
 - [ ] Handle sentences
 - [x] **Click - popup/replace with Eng word**
+- [ ] Refactor: Remove
+  - [ ] ~~Popup Services~~
+  - [ ] No saving repeated branches
 - [x] Word & sentence graph
   - [ ] Building connections
   - [ ] AI Recommendation engine
