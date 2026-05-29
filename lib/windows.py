@@ -102,6 +102,7 @@ class PopupDataService:
             )
     
     def get_active_session_id(self):
+        """Get current active session ID."""
         if not self.db:
             return None
         active = self.db.get_active_session()
@@ -831,17 +832,19 @@ class ControlPanel:
             popup_message("Session Ended", f"Session ended. {active['word_count']} words recorded.", parent=self.root)
 
     def _refresh_session_status(self):
+        """Update session status display."""
         if self.db is None:
             self.session_status_label.configure(text="📚 No session", text_color="gray")
             return
 
         active = self.db.get_active_session()
         if active:
-            self.session_status_label.configure(text=f"📚 {active['session_type']}: {active['word_count']} words", 
-                                                text_color="green")
+            self.session_status_label.configure(
+                text=f"📚 {active['session_type']}: {active['word_count']} words", 
+                text_color="green"
+            )
         else:
             self.session_status_label.configure(text="📚 No session", text_color="gray")
-
     def _show_session_list(self):
         if self.db is None:
             popup_message("Database Missing", "Session management requires a database connection.", parent=self.root)
@@ -905,6 +908,7 @@ class ControlPanel:
             ctk.CTkLabel(popup, text="No words in this session yet.").pack(pady=20)
     
     def get_current_chain_context(self):
+        """Get current chain context."""
         active_session = self.db.get_active_session() if self.db else None
         return {
             "db": self.db,
@@ -1189,6 +1193,7 @@ class Long_message_popup:
                 self.data_service.record_word_occurrence(word, node_id)
     
     def _view_chain(self):
+        """Open chain viewer for this content."""
         if not self.data_service or not self.data_service.db:
             return
         
@@ -1197,8 +1202,12 @@ class Long_message_popup:
         
         if self.context and self.context.active_node_id:
             from lib.chain_viewer import ChainViewer
-            viewer = ChainViewer(self.long_popup, self.data_service.db, self.context.active_node_id, 
-                                f"Chain for: {self.long_popup.title()}")
+            viewer = ChainViewer(
+                self.long_popup, 
+                self.data_service.db, 
+                self.context.active_node_id,
+                f"Chain for: {self.long_popup.title()}"
+            )
             viewer.focus()
     
     def show(self):

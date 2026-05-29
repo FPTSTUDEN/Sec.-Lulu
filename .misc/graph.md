@@ -1,3 +1,5 @@
+notice that when user click 
+session: 
 ```
 User opens "Smart Recommendations" panel
 
