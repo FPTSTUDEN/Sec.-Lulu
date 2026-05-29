@@ -1,6 +1,5 @@
 # lib/windows.py
 import tkinter as tk
-import tkinter.font as tkfont
 import tkinter.messagebox as tkmb
 import customtkinter as ctk
 import os
@@ -12,6 +11,7 @@ from lib.debug_utils import DebugLogger
 import time
 from lib.async_utils import run_async, stream_to_widgets, set_widget_text, clear_widget
 from lib.sentence_explorer import SentenceExplorerFrame
+from lib.ui_components import SessionManager, PopupManager, BaseCard
 
 MODES = ["Lookup Only", "Sparkle Notes", "Immersion Mode", "Word Blossom", "Sentence Whisper"]
 
@@ -474,25 +474,9 @@ class ControlPanel:
         self.session_send = ctk.CTkButton(self.top_line_frame, text="💬", width=40, command=lambda: setattr(self, 'session_context', self.session_entry.get()))
         self.session_send.pack(side="right", padx=(5,0))
 
-        # Session management controls
-        session_control_frame = ctk.CTkFrame(self.top_line_frame, fg_color="transparent")
-        session_control_frame.pack(side="right", padx=5)
-
-        self.session_status_label = ctk.CTkLabel(session_control_frame, text="📚 No session", 
-                                                font=ctk.CTkFont(size=10), text_color="gray")
-        self.session_status_label.pack(side="left", padx=2)
-
-        self.new_session_btn = ctk.CTkButton(session_control_frame, text="📂", width=30, height=25,
-                                            command=self._create_new_session)
-        self.new_session_btn.pack(side="left", padx=2)
-
-        self.end_session_btn = ctk.CTkButton(session_control_frame, text="⏹️", width=30, height=25,
-                                            fg_color="orange", command=self._end_current_session)
-        self.end_session_btn.pack(side="left", padx=2)
-
-        self.session_list_btn = ctk.CTkButton(session_control_frame, text="📜", width=30, height=25,
-                                            command=self._show_session_list)
-        self.session_list_btn.pack(side="left", padx=2)
+        # Use SessionManager component
+        self.session_manager = SessionManager(self.top_line_frame, db, on_session_changed=self._on_session_changed)
+        self.session_manager.pack(side="right", padx=5)
         
         # Buttons Frame
         self.buttons_frame = ctk.CTkFrame(self.root, fg_color="transparent")
@@ -530,6 +514,10 @@ class ControlPanel:
         self.chain_viewer_btn = ctk.CTkButton(self.top_line_frame, text="🔗", width=30, command=self.show_chain_selector)
         self.chain_viewer_btn.pack(side="right", padx=2)
     
+    def _on_session_changed(self, session_id):
+        """Handle session change."""
+        pass
+    
     def show_chain_selector(self):
         if not self.db:
             popup_message("No Database", "Database not available", parent=self.root)
@@ -541,32 +529,19 @@ class ControlPanel:
             popup_message("No Nodes", "No content nodes found", parent=self.root)
             return
         
-        selector = ctk.CTkToplevel(self.root)
-        selector.title("Select Node to View Chain")
-        selector.geometry("600x400")
-        selector.attributes("-topmost", True)
+        def display_func(item):
+            date_str = datetime.fromtimestamp(item['created_at']).strftime('%H:%M:%S')
+            return f"[{date_str}] {item['node_type'][:8]}: {item.get('title', '-')[:40]}"
         
-        ctk.CTkLabel(selector, text="Recent Content Nodes", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=10)
+        def on_select(node):
+            from lib.chain_viewer import ChainViewer
+            viewer = ChainViewer(self.root, self.db, node['id'], f"Content Chain - Node {node['id']}")
+            viewer.focus()
         
-        list_frame = ctk.CTkScrollableFrame(selector)
-        list_frame.pack(fill="both", expand=True, padx=10, pady=10)
-        
-        for node in nodes:
-            date_str = datetime.fromtimestamp(node['created_at']).strftime('%H:%M:%S')
-            
-            item_frame = ctk.CTkFrame(list_frame)
-            item_frame.pack(fill="x", pady=2)
-            
-            ctk.CTkLabel(item_frame, text=f"[{date_str}]", width=80, text_color="gray").pack(side="left", padx=5)
-            ctk.CTkLabel(item_frame, text=f"{node['node_type'][:8]}", width=100, font=ctk.CTkFont(weight="bold")).pack(side="left", padx=5)
-            ctk.CTkLabel(item_frame, text=node.get('title', '-')[:40], width=250).pack(side="left", padx=5)
-            
-            def view(nid=node['id']):
-                from lib.chain_viewer import ChainViewer
-                viewer = ChainViewer(selector, self.db, nid, f"Content Chain - Node {nid}")
-                viewer.focus()
-            
-            ctk.CTkButton(item_frame, text="View Chain", width=100, command=view).pack(side="right", padx=5)
+        PopupManager.create_selection_list(
+            self.root, "Select Node to View Chain", nodes, display_func, on_select,
+            width=600, height=400
+        )
 
     def show_debug_console(self):
         if self.debug_console and self.debug_console.winfo_exists():
@@ -760,128 +735,6 @@ class ControlPanel:
         if self.app_callback:
             self.app_callback()
 
-    def _create_new_session(self):
-        if self.db is None:
-            popup_message("Database Missing", "Session management requires a database connection.", parent=self.root)
-            return
-
-        popup = ctk.CTkToplevel(self.root)
-        popup.geometry("300x250")
-        popup.title("New Session")
-        popup.attributes("-topmost", True)
-        
-        ctk.CTkLabel(popup, text="Create New Learning Session", font=ctk.CTkFont(weight="bold")).pack(pady=10)
-        
-        ctk.CTkLabel(popup, text="Session Type:").pack(anchor="w", padx=20)
-        type_var = ctk.StringVar(value="General")
-        type_menu = ctk.CTkOptionMenu(popup, values=["Manhua", "Song", "News", "Conversation", "General"], 
-                                    variable=type_var)
-        type_menu.pack(fill="x", padx=20, pady=5)
-        
-        ctk.CTkLabel(popup, text="Source Name (optional):").pack(anchor="w", padx=20)
-        source_entry = ctk.CTkEntry(popup, placeholder_text="e.g., Legend of the Sword Ch3")
-        source_entry.pack(fill="x", padx=20, pady=5)
-        
-        def create():
-            source = source_entry.get().strip() or None
-            session_id = self.db.create_session(type_var.get(), source)
-            self._refresh_session_status()
-            popup.destroy()
-            popup_message("Session Created", f"Session {session_id} created!\nAdd words while studying to track them.", parent=self.root)
-        
-        ctk.CTkButton(popup, text="Create", command=create, fg_color="green").pack(pady=10)
-
-    def _end_current_session(self):
-        if self.db is None:
-            popup_message("Database Missing", "Session management requires a database connection.", parent=self.root)
-            return
-
-        active = self.db.get_active_session()
-        if not active:
-            popup_message("No Active Session", "No active session to end.", parent=self.root)
-            return
-        
-        if popup_message("End Session", f"End session with {active.get('word_count', 0)} words?", is_yes_no=True, parent=self.root):
-            # Sessions don't need explicit end in simplified API
-            self._refresh_session_status()
-            popup_message("Session Ended", f"Session ended.", parent=self.root)
-
-    def _refresh_session_status(self):
-        """Update session status display."""
-        if self.db is None:
-            self.session_status_label.configure(text="📚 No session", text_color="gray")
-            return
-
-        active = self.db.get_active_session()
-        if active:
-            self.session_status_label.configure(
-                text=f"📚 {active.get('title', 'Session')[:30]}: {active.get('word_count', 0)} words", 
-                text_color="green"
-            )
-        else:
-            self.session_status_label.configure(text="📚 No session", text_color="gray")
-    
-    def _show_session_list(self):
-        if self.db is None:
-            popup_message("Database Missing", "Session management requires a database connection.", parent=self.root)
-            return
-
-        sessions = self.db.get_all_sessions()
-        if not sessions:
-            popup_message("Sessions", "No sessions recorded yet.", parent=self.root)
-            return
-        
-        popup = ctk.CTkToplevel(self.root)
-        popup.geometry("700x500")
-        popup.title("Session Manager")
-        popup.attributes("-topmost", True)
-        
-        ctk.CTkLabel(popup, text="📚 Session Manager", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
-        
-        list_frame = ctk.CTkScrollableFrame(popup)
-        list_frame.pack(fill="both", expand=True, padx=20, pady=10)
-        
-        for s in sessions:
-            item_frame = ctk.CTkFrame(list_frame)
-            item_frame.pack(fill="x", pady=3)
-            
-            date_str = datetime.fromtimestamp(s['created_at']).strftime('%m-%d %H:%M')
-            title = s.get('title', 'Session')
-            status = "🟢"
-            
-            ctk.CTkLabel(item_frame, text=f"{status} 📚", 
-                        font=ctk.CTkFont(weight="bold"), width=40).pack(side="left", padx=5)
-            ctk.CTkLabel(item_frame, text=title[:40], width=200).pack(side="left", padx=5)
-            ctk.CTkLabel(item_frame, text=f"{s.get('word_count', 0)} words", width=80).pack(side="left", padx=5)
-            ctk.CTkLabel(item_frame, text=date_str, width=100, text_color="gray").pack(side="left", padx=5)
-            
-            def view_words(sid=s['id']):
-                self._view_session_words(sid)
-                popup.destroy()
-            ctk.CTkButton(item_frame, text="View Words", width=80, command=view_words).pack(side="right", padx=5)
-
-    def _view_session_words(self, session_id: int):
-        words = self.db.get_session_words(session_id)
-        
-        popup = ctk.CTkToplevel(self.root)
-        popup.geometry("500x400")
-        popup.title(f"Session Words")
-        popup.attributes("-topmost", True)
-        
-        ctk.CTkLabel(popup, text=f"📚 Session Details", font=ctk.CTkFont(size=14, weight="bold")).pack(pady=10)
-        
-        if words:
-            list_frame = ctk.CTkScrollableFrame(popup)
-            list_frame.pack(fill="both", expand=True, padx=20, pady=10)
-            
-            for w in words:
-                word_frame = ctk.CTkFrame(list_frame)
-                word_frame.pack(fill="x", pady=2)
-                ctk.CTkLabel(word_frame, text=w['content'], font=ctk.CTkFont(weight="bold"), width=100).pack(side="left", padx=5)
-                ctk.CTkLabel(word_frame, text=w.get('translation', '')[:40], width=250).pack(side="left", padx=5)
-        else:
-            ctk.CTkLabel(popup, text="No words in this session yet.").pack(pady=20)
-    
     def get_current_chain_context(self):
         """Get current chain context."""
         active_session = self.db.get_active_session() if self.db else None

@@ -1,11 +1,13 @@
 """
 Chain Viewer - Displays learning content hierarchy.
+Refactored to use ExpandableCard for cleaner code.
 """
 
 import customtkinter as ctk
 from datetime import datetime
 from typing import Dict, List, Optional
 from lib.db import VocabDatabase
+from lib.ui_components import ExpandableCard, PopupManager
 
 
 class ChainViewer(ctk.CTkToplevel):
@@ -64,20 +66,18 @@ class ChainViewer(ctk.CTkToplevel):
         tab_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
         tab_frame.pack(fill="x", pady=(0, 10))
         
-        self.list_btn = ctk.CTkButton(tab_frame, text="📋 List View", width=120,
-                                      command=lambda: self._show_tab("list"), fg_color="#1565c0")
-        self.list_btn.pack(side="left", padx=5)
-        
-        self.graph_btn = ctk.CTkButton(tab_frame, text="🔗 Graph View", width=120,
-                                       command=lambda: self._show_tab("graph"), fg_color="gray")
-        self.graph_btn.pack(side="left", padx=5)
-        
-        self.detail_btn = ctk.CTkButton(tab_frame, text="📊 Node Details", width=120,
-                                        command=lambda: self._show_tab("detail"), fg_color="gray")
-        self.detail_btn.pack(side="left", padx=5)
+        self.tab_buttons = {}
+        for tab_name, icon in [("list", "📋 List View"), 
+                                ("graph", "🔗 Graph View"), 
+                                ("detail", "📊 Node Details")]:
+            btn = ctk.CTkButton(tab_frame, text=icon, width=120,
+                               command=lambda t=tab_name: self._show_tab(t))
+            btn.pack(side="left", padx=5)
+            self.tab_buttons[tab_name] = btn
         
         # Info label
-        self.info_label = ctk.CTkLabel(self.main_frame, text="", text_color="gray", font=ctk.CTkFont(size=11))
+        self.info_label = ctk.CTkLabel(self.main_frame, text="", text_color="gray", 
+                                       font=ctk.CTkFont(size=11))
         self.info_label.pack(pady=(0, 5))
         
         # Content area
@@ -96,9 +96,8 @@ class ChainViewer(ctk.CTkToplevel):
         self.graph_frame.pack_forget()
         self.detail_frame.pack_forget()
         
-        self.list_btn.configure(fg_color="#1565c0" if tab_name == "list" else "gray")
-        self.graph_btn.configure(fg_color="#1565c0" if tab_name == "graph" else "gray")
-        self.detail_btn.configure(fg_color="#1565c0" if tab_name == "detail" else "gray")
+        for name, btn in self.tab_buttons.items():
+            btn.configure(fg_color="#1565c0" if name == tab_name else "gray")
         
         if tab_name == "list":
             self.list_frame.pack(fill="both", expand=True)
@@ -126,24 +125,27 @@ class ChainViewer(ctk.CTkToplevel):
             self.info_label.configure(text=f"Error: {e}")
     
     def _populate_list(self):
-        """Populate list view."""
+        """Populate list view using ExpandableCard."""
         for widget in self.list_frame.winfo_children():
             widget.destroy()
         
         if not self.chain_nodes:
-            self._show_error(self.list_frame, "No chain found.")
+            PopupManager.show_info(self, "No Data", "No chain found.")
             return
         
-        # Show current node
-        self._add_node_card(self.current_node, is_current=True)
+        # Show current node (highlighted)
+        current_card = self._create_node_card(self.current_node, is_current=True)
+        current_card.pack(fill="x", pady=5, padx=5)
         
         # Show ancestors
-        if len(self.chain_nodes) > 1:
+        ancestors = self.chain_nodes[:-1]
+        if ancestors:
             arrow = ctk.CTkLabel(self.list_frame, text="⬇️ Came from ⬇️", text_color="orange")
             arrow.pack(pady=5)
-        
-        for node in reversed(self.chain_nodes[:-1]):
-            self._add_node_card(node, is_current=False)
+            
+            for node in reversed(ancestors):
+                card = self._create_node_card(node, is_current=False)
+                card.pack(fill="x", pady=5, padx=5)
         
         # Show children
         if self.child_nodes:
@@ -153,70 +155,72 @@ class ChainViewer(ctk.CTkToplevel):
             for child in self.child_nodes:
                 child_node = self.db.get_node(child['id'])
                 if child_node:
-                    self._add_node_card(child_node, is_current=False)
+                    card = self._create_node_card(child_node, is_current=False)
+                    card.pack(fill="x", pady=5, padx=5)
     
-    def _add_node_card(self, node: Dict, is_current: bool = False):
-        """Add a node card to list view."""
-        card = ctk.CTkFrame(self.list_frame, corner_radius=10,
-                           border_width=2 if is_current else 1,
-                           border_color="#4caf50" if is_current else "gray")
-        card.pack(fill="x", pady=5, padx=5)
-        
-        # Header
-        header = ctk.CTkFrame(card, fg_color="transparent")
-        header.pack(fill="x", padx=12, pady=(8, 5))
-        
+    def _create_node_card(self, node: Dict, is_current: bool = False) -> ExpandableCard:
+        """Create an expandable card for a node."""
         icon = self.NODE_ICONS.get(node.get('node_type', ''), '📌')
         type_display = node.get('node_type', 'Unknown').replace('_', ' ').title()
+        time_str = datetime.fromtimestamp(node['created_at']).strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Create card
+        title_text = f"{icon} {type_display}"
+        if is_current:
+            title_text = f"★ CURRENT ★ {title_text}"
+        
+        card = ExpandableCard(
+            self.list_frame,
+            title=title_text,
+            subtitle=time_str,
+            icon="",
+            preview=node.get('title', node.get('content', '')[:60] if node.get('content') else '')[:60]
+        )
         
         if is_current:
-            ctk.CTkLabel(header, text="★ CURRENT ★", font=ctk.CTkFont(size=11, weight="bold"),
-                        text_color="#4caf50").pack(side="left")
+            card.configure(border_width=2, border_color="#4caf50")
         
-        ctk.CTkLabel(header, text=f"{icon} {type_display}", font=ctk.CTkFont(weight="bold")
-                    ).pack(side="left", padx=(15 if is_current else 0, 0))
-        
-        time_str = datetime.fromtimestamp(node['created_at']).strftime('%Y-%m-%d %H:%M:%S')
-        ctk.CTkLabel(header, text=time_str, text_color="gray", font=ctk.CTkFont(size=10)).pack(side="right")
-        
-        # Title
-        if node.get('title'):
-            ctk.CTkLabel(card, text=f"📌 {node['title']}", font=ctk.CTkFont(weight="bold", size=13),
-                        wraplength=700).pack(anchor="w", padx=12, pady=(0, 5))
-        
-        # Content preview
+        # Add expanded content
         content = node.get('content', '')
         if content:
             preview = content[:200] + "..." if len(content) > 200 else content
-            content_frame = ctk.CTkFrame(card, fg_color=("gray95", "gray18"), corner_radius=6)
-            content_frame.pack(fill="x", padx=12, pady=(0, 8))
-            ctk.CTkLabel(content_frame, text=preview, wraplength=750, justify="left").pack(padx=10, pady=8)
+            card.add_content(preview)
         
-        # Buttons
-        btn_frame = ctk.CTkFrame(card, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=12, pady=(0, 8))
+        # Add expanded sections
+        if node.get('title'):
+            card.add_expanded_section("📌 Title", node['title'])
+        
+        if node.get('content'):
+            card.add_expanded_section("📝 Content", node['content'][:500])
+        
+        if node.get('translation'):
+            card.add_expanded_section("🌐 Translation", node['translation'])
+        
+        # Add buttons
+        buttons = []
         
         def view_chain(nid=node['id']):
             ChainViewer(self._parent_ref, self.db, nid, f"Chain - Node {nid}").focus()
-        
-        ctk.CTkButton(btn_frame, text="View Chain", width=100, height=28, command=view_chain).pack(side="left", padx=2)
+        buttons.append({'text': "View Chain", 'command': view_chain})
         
         if not is_current:
             def jump(nid=node['id']):
                 self.node_id = nid
                 self._load_data()
                 self._populate_list()
-            
-            ctk.CTkButton(btn_frame, text="Jump to Node", width=100, height=28,
-                         fg_color="#ff9800", command=jump).pack(side="left", padx=2)
+            buttons.append({'text': "Jump to Node", 'command': jump, 'fg_color': "#ff9800"})
+        
+        card.add_button_row(buttons)
+        
+        return card
     
     def _populate_graph(self):
-        """Populate graph visualization."""
+        """Populate graph visualization (simplified)."""
         for widget in self.graph_frame.winfo_children():
             widget.destroy()
         
         if not self.chain_nodes and not self.child_nodes:
-            self._show_error(self.graph_frame, "No data for graph view.")
+            PopupManager.show_info(self, "No Data", "No data for graph view.")
             return
         
         self.graph_canvas = ctk.CTkCanvas(self.graph_frame, bg='#1e1e1e', highlightthickness=0)
@@ -327,85 +331,63 @@ class ChainViewer(ctk.CTkToplevel):
             widget.destroy()
         
         if not self.current_node:
-            self._show_error(self.detail_frame, "No node selected.")
+            PopupManager.show_info(self, "No Data", "No node selected.")
             return
         
         node = self.current_node
-        
-        # Header
-        header = ctk.CTkFrame(self.detail_frame, fg_color=("gray90", "gray20"), corner_radius=10)
-        header.pack(fill="x", pady=5, padx=5)
-        
         icon = self.NODE_ICONS.get(node.get('node_type', ''), '📌')
         type_display = node.get('node_type', 'Unknown').replace('_', ' ').title()
-        
-        ctk.CTkLabel(header, text=f"{icon} {type_display}", font=ctk.CTkFont(size=18, weight="bold")
-                    ).pack(anchor="w", padx=15, pady=(10, 5))
-        
         time_str = datetime.fromtimestamp(node['created_at']).strftime('%Y-%m-%d %H:%M:%S')
-        ctk.CTkLabel(header, text=f"ID: {node['id']} | Created: {time_str}",
-                    text_color="gray").pack(anchor="w", padx=15, pady=(0, 5))
         
-        # Title
+        # Header card
+        header_card = ExpandableCard(self.detail_frame, title=f"{icon} {type_display}",
+                                     subtitle=f"ID: {node['id']} | Created: {time_str}",
+                                     preview="", icon="")
+        header_card.configure(fg_color=("gray90", "gray20"))
+        
         if node.get('title'):
-            title_frame = ctk.CTkFrame(self.detail_frame, fg_color=("gray90", "gray20"), corner_radius=10)
-            title_frame.pack(fill="x", pady=5, padx=5)
-            ctk.CTkLabel(title_frame, text="📌 Title", font=ctk.CTkFont(weight="bold", size=14)).pack(anchor="w", padx=15, pady=(10, 0))
-            ctk.CTkLabel(title_frame, text=node['title'], wraplength=700).pack(anchor="w", padx=15, pady=(5, 10))
+            header_card.add_expanded_section("📌 Title", node['title'])
         
-        # Content
-        content_frame = ctk.CTkFrame(self.detail_frame, fg_color=("gray90", "gray20"), corner_radius=10)
-        content_frame.pack(fill="both", expand=True, pady=5, padx=5)
+        if node.get('content'):
+            header_card.add_expanded_section("📝 Content", node['content'])
         
-        ctk.CTkLabel(content_frame, text="📝 Content", font=ctk.CTkFont(weight="bold", size=14)).pack(anchor="w", padx=15, pady=(10, 0))
-        
-        content_box = ctk.CTkTextbox(content_frame, wrap="word", height=150)
-        content_box.insert("1.0", node.get('content', 'No content'))
-        content_box.configure(state="disabled")
-        content_box.pack(fill="both", expand=True, padx=15, pady=(5, 10))
-        
-        # Translation
         if node.get('translation'):
-            trans_frame = ctk.CTkFrame(self.detail_frame, fg_color=("gray90", "gray20"), corner_radius=10)
-            trans_frame.pack(fill="x", pady=5, padx=5)
-            ctk.CTkLabel(trans_frame, text="🌐 Translation", font=ctk.CTkFont(weight="bold", size=14)).pack(anchor="w", padx=15, pady=(10, 0))
-            ctk.CTkLabel(trans_frame, text=node['translation'], wraplength=700).pack(anchor="w", padx=15, pady=(5, 10))
+            header_card.add_expanded_section("🌐 Translation", node['translation'])
         
-        # Parent/Child info
+        # Connections card
         parent = self.db.get_parent(node['id'])
         children = self.db.get_children(node['id'])
         
-        info_frame = ctk.CTkFrame(self.detail_frame, fg_color=("gray90", "gray20"), corner_radius=10)
-        info_frame.pack(fill="x", pady=5, padx=5)
-        
-        ctk.CTkLabel(info_frame, text="🔗 Connections", font=ctk.CTkFont(weight="bold", size=14)).pack(anchor="w", padx=15, pady=(10, 0))
-        
-        if parent:
-            ctk.CTkLabel(info_frame, text=f"Parent: {parent['node_type']} (ID: {parent['id']})",
-                        text_color="orange").pack(anchor="w", padx=15, pady=2)
-        
-        if children:
-            ctk.CTkLabel(info_frame, text=f"Children: {len(children)}",
-                        text_color="green").pack(anchor="w", padx=15, pady=2)
+        if parent or children:
+            conn_card = ExpandableCard(self.detail_frame, title="🔗 Connections", 
+                                       preview="", icon="", subtitle="")
+            conn_card.configure(fg_color=("gray90", "gray20"))
+            
+            if parent:
+                conn_card.add_expanded_section("Parent", f"{parent['node_type']} (ID: {parent['id']})", 
+                                               text_color="orange")
+            if children:
+                conn_card.add_expanded_section("Children", f"{len(children)} children", 
+                                               text_color="green")
         
         # Action buttons
         btn_frame = ctk.CTkFrame(self.detail_frame, fg_color="transparent")
-        btn_frame.pack(fill="x", pady=10, padx=5)
+        btn_frame.pack(fill="x", pady=10)
         
         def copy_content():
             self.clipboard_clear()
             self.clipboard_append(node.get('content', ''))
             self.info_label.configure(text="Copied!")
+            self.after(2000, lambda: self.info_label.configure(text=f"Node {self.node_id} | ..."))
         
         ctk.CTkButton(btn_frame, text="📋 Copy", command=copy_content).pack(side="left", padx=5)
         
         def view_full_chain():
-            ChainViewer(self._parent_ref, self.db, node['id'], f"Chain - {node.get('title', node['id'])}").focus()
+            ChainViewer(self._parent_ref, self.db, node['id'], 
+                       f"Chain - {node.get('title', node['id'])}").focus()
         
-        ctk.CTkButton(btn_frame, text="🔗 Full Chain", fg_color="#1565c0", command=view_full_chain).pack(side="left", padx=5)
-    
-    def _show_error(self, parent, message: str):
-        ctk.CTkLabel(parent, text=f"❌ {message}", text_color="red").pack(pady=20)
+        ctk.CTkButton(btn_frame, text="🔗 Full Chain", fg_color="#1565c0", 
+                     command=view_full_chain).pack(side="left", padx=5)
     
     def focus(self):
         self.lift()
